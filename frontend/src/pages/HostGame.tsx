@@ -212,6 +212,13 @@ function SetupTab(props: {
   teamsWithActions: number;
 }) {
   const { gameId, hostToken, game, meta, setMeta, saveMeta, locMarkers, openNewLoc, openEdit, removeLoc, reload, setErr, teamCount, teamsWithActions } = props;
+  const finalLatNum = meta.final_lat ? Number(meta.final_lat) : NaN;
+  const finalLngNum = meta.final_lng ? Number(meta.final_lng) : NaN;
+  const finalSet = Number.isFinite(finalLatNum) && Number.isFinite(finalLngNum);
+  const finalMarker: MapMarker[] = finalSet
+    ? [{ id: "final", lat: finalLatNum, lng: finalLngNum, label: meta.final_label || "Final destination", color: "#f5a623" }]
+    : [];
+
   return (
     <div className="stack">
       <div className="grid-2">
@@ -223,15 +230,27 @@ function SetupTab(props: {
           <label>Final location label (optional)</label>
           <input value={meta.final_label} onChange={e => setMeta({ ...meta, final_label: e.target.value })} placeholder="e.g. Statue of …" />
         </div>
-        <div>
-          <label>Final latitude</label>
-          <input value={meta.final_lat} onChange={e => setMeta({ ...meta, final_lat: e.target.value })} placeholder="51.2087" />
-        </div>
-        <div>
-          <label>Final longitude</label>
-          <input value={meta.final_lng} onChange={e => setMeta({ ...meta, final_lng: e.target.value })} placeholder="3.2247" />
+      </div>
+
+      <div>
+        <label>Final destination — click the map to drop the pin</label>
+        <MapView markers={finalMarker} onMapClick={(lat, lng) => setMeta({ ...meta, final_lat: lat.toFixed(6), final_lng: lng.toFixed(6) })} />
+        <div className="row" style={{ marginTop: 6, fontSize: 12, gap: 12 }}>
+          <span className="muted">
+            {finalSet
+              ? `📍 ${finalLatNum.toFixed(5)}, ${finalLngNum.toFixed(5)}`
+              : "No final destination set yet."}
+          </span>
+          <div className="spacer" />
+          {finalSet && (
+            <button
+              className="btn btn--ghost btn--small"
+              onClick={() => setMeta({ ...meta, final_lat: "", final_lng: "" })}
+            >Clear pin</button>
+          )}
         </div>
       </div>
+
       <div className="row">
         <div className="spacer" />
         <button className="btn btn--ghost" onClick={saveMeta}>Save game settings</button>
