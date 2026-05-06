@@ -90,9 +90,32 @@ POST   /api/games/{id}/locations   X-Host-Token     add location
 PUT    /api/games/{id}/locations/{lid}              update location
 DELETE /api/games/{id}/locations/{lid}              delete location
 
+POST   /api/games/{id}/actions            X-Host-Token   add action (pool item)
+PUT    /api/games/{id}/actions/{aid}      X-Host-Token   update action text
+DELETE /api/games/{id}/actions/{aid}      X-Host-Token   delete action
+POST   /api/games/{id}/actions/assign     X-Host-Token   top up every team to 3 assigned
+POST   /api/games/{id}/teams/{tid}/actions/{ta}/toggle   approve / unapprove
+
 POST   /api/teams/join                              join with code → team token
-GET    /api/teams/{id}/state       X-Team-Token     locations + progress (no answers)
+GET    /api/teams/{id}/state       X-Team-Token     locations + progress + assigned actions
 POST   /api/teams/{id}/ping        X-Team-Token     update last GPS
 GET    /api/teams/{id}/question?location_id=        get question if in range
 POST   /api/teams/{id}/answer                       submit answer; returns fragment if correct
 ```
+
+## Actions flow
+
+Each team gets 3 random actions from the host's pool when they join. The
+*completion* of an action is decided by the host, not the team:
+
+1. The team performs the action and sends proof to the host via WhatsApp
+   (out of band — the app does not collect photos).
+2. The host opens the **Live** tab, sees the team in **Pending approvals**,
+   and clicks **Approve**.
+3. The team's app shows the action flip from "Pending" to "Approved ✓"
+   on the next state poll.
+
+If the host accidentally approves the wrong one they can click **Unapprove**
+on the same row. Approving an action does not gate the final coordinates;
+locations are the gate. Actions are a parallel objective the host scores
+however they like at the end.

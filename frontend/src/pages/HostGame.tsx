@@ -2,8 +2,8 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Action, HostDashboard, LocationHost, addAction, addLocation, deleteAction,
-  deleteLocation, getHostDashboard, reassignActions, startGame, updateAction,
-  updateGame, updateLocation,
+  deleteLocation, getHostDashboard, hostToggleTeamAction, reassignActions,
+  startGame, updateAction, updateGame, updateLocation,
 } from "../api";
 import MapView, { MapMarker } from "../components/MapView";
 
@@ -159,7 +159,7 @@ export default function HostGame() {
             setErr={setErr}
           />
         ) : (
-          <LiveTab data={data} />
+          <LiveTab data={data} gameId={id} hostToken={hostToken} reload={reload} setErr={setErr} />
         )}
       </div>
 
@@ -339,9 +339,24 @@ function ActionsEditor(props: {
   );
 }
 
-function LiveTab({ data }: { data: HostDashboard }) {
+function LiveTab(props: {
+  data: HostDashboard;
+  gameId: number;
+  hostToken: string;
+  reload: () => void;
+  setErr: (s: string) => void;
+}) {
+  const { data, gameId, hostToken, reload, setErr } = props;
   const { game, teams, progress_matrix } = data;
   const [openTeamId, setOpenTeamId] = useState<number | null>(null);
+  const [showLocDetail, setShowLocDetail] = useState(false);
+
+  async function approve(teamId: number, taId: number) {
+    try {
+      await hostToggleTeamAction(gameId, teamId, taId, hostToken);
+      reload();
+    } catch (e: any) { setErr(e.message); }
+  }
   const teamMarkers: MapMarker[] = teams
     .filter(t => t.last_lat != null && t.last_lng != null)
     .map(t => ({ id: `t-${t.id}`, lat: t.last_lat!, lng: t.last_lng!, label: `${t.name} (${t.solved_count}/${t.total})`, color: t.color }));
@@ -350,9 +365,41 @@ function LiveTab({ data }: { data: HostDashboard }) {
     id: `l-${l.id}`, lat: l.lat, lng: l.lng, label: l.name, radius_m: l.radius_m, showRadius: true,
   }));
 
+  const totalActionsAssigned = teams.reduce((acc, t) => acc + t.actions_total, 0);
+  const totalActionsApproved = teams.reduce((acc, t) => acc + t.actions_done, 0);
+  const pendingByTeam = teams
+    .map(t => ({ team: t, pending: t.actions.filter(a => !a.completed) }))
+    .filter(x => x.pending.length > 0);
+
   return (
     <div className="stack">
       <MapView markers={[...locMarkers, ...teamMarkers]} big />
+
+      {pendingByTeam.length > 0 && (
+        <>
+          <h2>Pending approvals <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· {totalActionsApproved}/{totalActionsAssigned} approved overall</span></h2>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            Teams send proof via WhatsApp. Click <em>Approve</em> once you've seen it.
+          </div>
+          <ul className="loc-list">
+            {pendingByTeam.flatMap(({ team, pending }) =>
+              pending.map(a => (
+                <li key={`${team.id}-${a.id}`} className="loc-row">
+                  <div>
+                    <div className="loc-row__title">
+                      <span className="dot" style={{ background: team.color, marginRight: 8 }} />
+                      {team.name}
+                    </div>
+                    <div className="loc-row__meta">{a.text}</div>
+                  </div>
+                  <button className="btn btn--small" onClick={() => approve(team.id, a.id)}>Approve</button>
+                </li>
+              ))
+            )}
+          </ul>
+        </>
+      )}
+
       <h2>Progress</h2>
       {teams.length === 0 ? (
         <div className="muted">No teams have joined yet.</div>
@@ -392,10 +439,23 @@ function LiveTab({ data }: { data: HostDashboard }) {
                           {t.actions.length === 0 ? (
                             <span className="muted">No actions assigned yet.</span>
                           ) : (
-                            <ul className="list-bullet" style={{ margin: 0 }}>
+                            <ul className="loc-list" style={{ margin: 0 }}>
                               {t.actions.map(a => (
-                                <li key={a.id} style={{ color: a.completed ? "var(--good)" : "var(--text)" }}>
-                                  {a.completed ? "✓ " : "○ "}{a.text}
+                                <li key={a.id} className="loc-row" onClick={e => e.stopPropagation()}>
+                                  <span style={{ color: a.completed ? "var(--good)" : "var(--text)", textDecoration: a.completed ? "line-through" : "none" }}>
+                                    {a.completed ? "✓ " : "○ "}{a.text}
+                                    {a.completed && a.completed_at && (
+                                      <span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>
+                                        {new Date(a.completed_at).toLocaleTimeString()}
+                                      </span>
+                                    )}
+                                  </span>
+                                  <button
+                                    className={a.completed ? "btn btn--ghost btn--small" : "btn btn--small"}
+                                    onClick={() => approve(t.id, a.id)}
+                                  >
+                                    {a.completed ? "Unapprove" : "Approve"}
+                                  </button>
                                 </li>
                               ))}
                             </ul>
@@ -410,6 +470,48 @@ function LiveTab({ data }: { data: HostDashboard }) {
           </table>
         </div>
       )}
+
+      <div className="row" style={{ marginTop: 8 }}>
+        <h2 style={{ margin: 0 }}>All locations</h2>
+        <div className="spacer" />
+        <button className="btn btn--ghost btn--small" onClick={() => setShowLocDetail(s => !s)}>
+          {showLocDetail ? "Hide answers" : "Show answers"}
+        </button>
+      </div>
+      <ul className="loc-list">
+        {game.locations.map(l => (
+          <li key={l.id} className="loc-row" style={{ alignItems: "flex-start" }}>
+            <div style={{ flex: 1 }}>
+              <div className="loc-row__title">{l.name}</div>
+              <div className="loc-row__meta">
+                {l.lat.toFixed(5)}, {l.lng.toFixed(5)} · radius {l.radius_m}m · fragment <span className="fragment-pill">{l.fragment || "—"}</span>
+              </div>
+              <div className="loc-row__meta" style={{ marginTop: 4, color: "var(--text)" }}>
+                <strong>Q:</strong> {l.question}
+              </div>
+              {showLocDetail && (
+                <>
+                  <div className="loc-row__meta" style={{ color: "var(--good)" }}>
+                    <strong>A:</strong> {l.answer}
+                  </div>
+                  {l.hint && (
+                    <div className="loc-row__meta" style={{ color: "var(--warn)" }}>
+                      <strong>Hint:</strong> {l.hint}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <a
+              className="btn btn--ghost btn--small"
+              href={`https://maps.google.com/?q=${l.lat},${l.lng}`}
+              target="_blank"
+              rel="noreferrer"
+            >Map</a>
+          </li>
+        ))}
+        {game.locations.length === 0 && <div className="muted">No locations configured.</div>}
+      </ul>
     </div>
   );
 }

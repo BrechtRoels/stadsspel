@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  TeamState, fetchQuestion, submitAnswer, teamPing, teamState, toggleTeamAction,
+  TeamState, fetchQuestion, submitAnswer, teamPing, teamState,
 } from "../api";
 import MapView, { MapMarker } from "../components/MapView";
 import { haversineMeters } from "../geo";
@@ -166,31 +166,19 @@ export default function PlayerGame() {
             <h2 style={{ margin: 0 }}>Your actions</h2>
             <div className="spacer" />
             <span className="muted" style={{ fontSize: 12 }}>
-              {state.actions.filter(a => a.completed).length} / {state.actions.length}
+              {state.actions.filter(a => a.completed).length} / {state.actions.length} approved
             </span>
           </div>
           <div className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
-            Tap once you've done it. You can untap to undo.
+            Send proof to the host via WhatsApp. The host approves it here, and you'll see it update.
           </div>
           <ul className="loc-list">
             {state.actions.map(a => (
-              <li key={a.id} className="loc-row" style={{ cursor: "pointer", opacity: a.completed ? 0.7 : 1 }}
-                  onClick={async () => {
-                    try {
-                      await toggleTeamAction(id, token, a.id);
-                      setState(await teamState(id, token));
-                    } catch (e: any) { setErr(e.message); }
-                  }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{
-                    width: 22, height: 22, borderRadius: 6,
-                    border: "2px solid var(--border)",
-                    background: a.completed ? "var(--good)" : "transparent",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    color: "white", fontWeight: 700, fontSize: 14,
-                  }}>{a.completed ? "✓" : ""}</span>
-                  <span style={{ textDecoration: a.completed ? "line-through" : "none" }}>{a.text}</span>
-                </div>
+              <li key={a.id} className="loc-row" style={{ opacity: a.completed ? 0.85 : 1 }}>
+                <span style={{ textDecoration: a.completed ? "line-through" : "none" }}>{a.text}</span>
+                <span className={`distance-tag ${a.completed ? "distance-tag--done" : "distance-tag--out"}`}>
+                  {a.completed ? "✓ Approved" : "Pending"}
+                </span>
               </li>
             ))}
           </ul>

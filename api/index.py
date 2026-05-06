@@ -438,20 +438,27 @@ def team_state(
     return _state_for(db, team)
 
 
-@app.post("/api/teams/{team_id}/actions/{team_action_id}/toggle")
-def toggle_team_action(
+@app.post("/api/games/{game_id}/teams/{team_id}/actions/{team_action_id}/toggle")
+def host_toggle_team_action(
+    game_id: int,
     team_id: int,
     team_action_id: int,
-    x_team_token: str = Header(default=""),
+    x_host_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    team = _require_team(db, team_id, x_team_token)
+    """Approve / unapprove a team's completion of an action.
+
+    Teams send proof out-of-band (e.g. WhatsApp); only the host flips this.
+    """
+    _require_host(db, game_id, x_host_token)
     ta = db.query(models.TeamAction).filter(
         models.TeamAction.id == team_action_id,
-        models.TeamAction.team_id == team.id,
+        models.TeamAction.team_id == team_id,
     ).first()
     if not ta:
         raise HTTPException(status_code=404, detail="Action not found for this team")
+    if ta.team.game_id != game_id:
+        raise HTTPException(status_code=404, detail="Action not found for this game")
     ta.completed = not ta.completed
     ta.completed_at = datetime.utcnow() if ta.completed else None
     db.commit()

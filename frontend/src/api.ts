@@ -179,8 +179,10 @@ export const submitAnswer = (teamId: number, teamToken: string, locationId: numb
     { body: { location_id: locationId, answer }, teamToken }
   );
 
-export const toggleTeamAction = (teamId: number, teamToken: string, teamActionId: number) =>
+export const hostToggleTeamAction = (
+  gameId: number, teamId: number, teamActionId: number, hostToken: string
+) =>
   req<{ id: number; completed: boolean; completed_at?: string | null }>(
-    `/api/teams/${teamId}/actions/${teamActionId}/toggle`,
-    { method: "POST", teamToken }
+    `/api/games/${gameId}/teams/${teamId}/actions/${teamActionId}/toggle`,
+    { method: "POST", hostToken }
   );
