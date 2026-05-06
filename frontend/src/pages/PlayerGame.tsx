@@ -165,30 +165,38 @@ export default function PlayerGame() {
         {err && <div className="banner banner--bad" style={{ marginTop: 12 }}>{err}</div>}
       </div>
 
-      {state.actions.length > 0 && (
-        <div className="card">
-          <div className="row" style={{ alignItems: "baseline" }}>
-            <h2 style={{ margin: 0 }}>Your actions</h2>
-            <div className="spacer" />
+      <div className="card">
+        <div className="row" style={{ alignItems: "baseline" }}>
+          <h2 style={{ margin: 0 }}>Your actions</h2>
+          <div className="spacer" />
+          {state.actions.length > 0 && (
             <span className="muted" style={{ fontSize: 12 }}>
               {state.actions.filter(a => a.completed).length} / {state.actions.length} approved
             </span>
-          </div>
-          <div className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
-            Send proof to the host via WhatsApp. The host approves it here, and you'll see it update.
-          </div>
-          <ul className="loc-list">
-            {state.actions.map(a => (
-              <li key={a.id} className="loc-row" style={{ opacity: a.completed ? 0.85 : 1 }}>
-                <span style={{ textDecoration: a.completed ? "line-through" : "none" }}>{a.text}</span>
-                <span className={`distance-tag ${a.completed ? "distance-tag--done" : "distance-tag--out"}`}>
-                  {a.completed ? "✓ Approved" : "Pending"}
-                </span>
-              </li>
-            ))}
-          </ul>
+          )}
         </div>
-      )}
+        {state.actions.length === 0 ? (
+          <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Waiting for the host to reveal your actions. They'll appear here automatically.
+          </div>
+        ) : (
+          <>
+            <div className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
+              Send proof to the host via WhatsApp. The host approves it here, and you'll see it update.
+            </div>
+            <ul className="loc-list">
+              {state.actions.map(a => (
+                <li key={a.id} className="loc-row" style={{ opacity: a.completed ? 0.85 : 1 }}>
+                  <span style={{ textDecoration: a.completed ? "line-through" : "none" }}>{a.text}</span>
+                  <span className={`distance-tag ${a.completed ? "distance-tag--done" : "distance-tag--out"}`}>
+                    {a.completed ? "✓ Approved" : "Pending"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
 
       {solvedFragments.length > 0 && (
         <div className="card">

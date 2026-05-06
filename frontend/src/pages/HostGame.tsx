@@ -167,6 +167,8 @@ export default function HostGame() {
             removeLoc={removeLoc}
             reload={reload}
             setErr={setErr}
+            teamCount={data.teams.length}
+            teamsWithActions={data.teams.filter(t => t.actions_total > 0).length}
           />
         ) : (
           <LiveTab
@@ -207,8 +209,10 @@ function SetupTab(props: {
   removeLoc: (id: number) => void;
   reload: () => void;
   setErr: (s: string) => void;
+  teamCount: number;
+  teamsWithActions: number;
 }) {
-  const { gameId, hostToken, game, meta, setMeta, saveMeta, locMarkers, openNewLoc, openEdit, removeLoc, reload, setErr } = props;
+  const { gameId, hostToken, game, meta, setMeta, saveMeta, locMarkers, openNewLoc, openEdit, removeLoc, reload, setErr, teamCount, teamsWithActions } = props;
   return (
     <div className="stack">
       <div className="grid-2">
@@ -261,12 +265,14 @@ function SetupTab(props: {
 
       <h2 style={{ marginTop: 16 }}>Actions pool</h2>
       <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-        Each team gets 3 random actions from this pool when they join. Add at least 3 (more = more variety).
+        Build the pool first, then click <em>Reveal actions</em> when you're ready. Each team gets 3 random actions from the pool. Players don't see anything until you reveal.
       </div>
       <ActionsEditor
         gameId={gameId}
         hostToken={hostToken}
         actions={game.actions}
+        teamCount={teamCount}
+        teamsWithActions={teamsWithActions}
         reload={reload}
         setErr={setErr}
       />
@@ -278,13 +284,20 @@ function ActionsEditor(props: {
   gameId: number;
   hostToken: string;
   actions: Action[];
+  teamCount: number;
+  teamsWithActions: number;
   reload: () => void;
   setErr: (s: string) => void;
 }) {
-  const { gameId, hostToken, actions, reload, setErr } = props;
+  const { gameId, hostToken, actions, teamCount, teamsWithActions, reload, setErr } = props;
   const [draft, setDraft] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
+
+  const initialReveal = teamsWithActions === 0;
+  const revealLabel = initialReveal
+    ? `Reveal actions to teams (${teamCount})`
+    : "Top up team actions";
 
   async function add() {
     const t = draft.trim();
@@ -303,8 +316,11 @@ function ActionsEditor(props: {
     try { await deleteAction(gameId, id, hostToken); reload(); }
     catch (e: any) { setErr(e.message); }
   }
-  async function topUp() {
-    try { const r = await reassignActions(gameId, hostToken); alert(`Topped up ${r.teams} team(s).`); reload(); }
+  async function reveal() {
+    if (initialReveal && actions.length < 3) {
+      if (!confirm(`Only ${actions.length} action(s) in the pool — teams will get fewer than 3. Continue?`)) return;
+    }
+    try { const r = await reassignActions(gameId, hostToken); alert(`Assigned to ${r.teams} team(s).`); reload(); }
     catch (e: any) { setErr(e.message); }
   }
 
@@ -344,13 +360,23 @@ function ActionsEditor(props: {
         ))}
         {actions.length === 0 && <div className="muted">No actions yet.</div>}
       </ul>
-      {actions.length > 0 && (
+      {actions.length > 0 && teamCount > 0 && (
         <div className="row">
           <div className="muted" style={{ fontSize: 12 }}>
-            Tip: if you added actions after teams joined, click here to fill in their slots.
+            {initialReveal
+              ? `${teamCount} team(s) joined and waiting. Reveal when ready.`
+              : "Click again only if you added more actions to the pool — fills missing slots, never reshuffles."}
           </div>
           <div className="spacer" />
-          <button className="btn btn--ghost btn--small" onClick={topUp}>Top up team actions</button>
+          <button
+            className={initialReveal ? "btn" : "btn btn--ghost btn--small"}
+            onClick={reveal}
+          >{revealLabel}</button>
+        </div>
+      )}
+      {actions.length > 0 && teamCount === 0 && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          No teams have joined yet — share the join code with your players.
         </div>
       )}
     </div>
@@ -377,6 +403,16 @@ function LiveTab(props: {
       reload();
     } catch (e: any) { setErr(e.message); }
   }
+
+  const teamsWithActions = data.teams.filter(t => t.actions_total > 0).length;
+  const teamsMissingActions = data.teams.length - teamsWithActions;
+  async function reveal() {
+    if (teamsWithActions === 0 && data.game.actions.length < 3) {
+      if (!confirm(`Only ${data.game.actions.length} action(s) in the pool — teams will get fewer than 3. Continue?`)) return;
+    }
+    try { const r = await reassignActions(gameId, hostToken); alert(`Assigned to ${r.teams} team(s).`); reload(); }
+    catch (e: any) { setErr(e.message); }
+  }
   const teamMarkers: MapMarker[] = teams
     .filter(t => t.last_lat != null && t.last_lng != null)
     .map(t => ({ id: `t-${t.id}`, lat: t.last_lat!, lng: t.last_lng!, label: `${t.name} (${t.solved_count}/${t.total})`, color: t.color }));
@@ -394,6 +430,19 @@ function LiveTab(props: {
   return (
     <div className="stack">
       <MapView markers={[...locMarkers, ...teamMarkers]} big />
+
+      {data.game.actions.length > 0 && data.teams.length > 0 && teamsMissingActions > 0 && (
+        <div className="banner banner--warn" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            {teamsWithActions === 0
+              ? `Actions are not yet revealed. ${data.teams.length} team(s) waiting — they don't see actions until you click reveal.`
+              : `${teamsMissingActions} team(s) joined after the reveal — top up to give them their 3 actions.`}
+          </div>
+          <button className="btn btn--small" onClick={reveal}>
+            {teamsWithActions === 0 ? `Reveal actions (${data.teams.length})` : "Top up"}
+          </button>
+        </div>
+      )}
 
       {pendingByTeam.length > 0 && (
         <>

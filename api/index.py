@@ -409,10 +409,10 @@ def join_game(payload: schemas.TeamJoinIn, db: Session = Depends(get_db)):
         token=_token(),
     )
     db.add(team)
-    db.flush()  # assign team.id before action assignment
-    _assign_actions_to_team(db, team)
     db.commit()
     db.refresh(team)
+    # Actions are NOT auto-assigned on join — the host triggers the reveal
+    # explicitly via POST /api/games/{game_id}/actions/assign.
     return schemas.TeamSession(
         team_id=team.id,
         team_token=team.token,
@@ -466,10 +466,6 @@ def team_state(
     db: Session = Depends(get_db),
 ):
     team = _require_team(db, team_id, x_team_token)
-    # Lazily top up if the host added actions after this team joined.
-    if _assign_actions_to_team(db, team) > 0:
-        db.commit()
-        db.refresh(team)
     return _state_for(db, team)
 
 
