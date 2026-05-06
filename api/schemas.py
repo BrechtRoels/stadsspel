@@ -28,6 +28,7 @@ class LocationPublicOut(BaseModel):
     lng: float
     radius_m: int
     order_idx: int
+    hint: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 

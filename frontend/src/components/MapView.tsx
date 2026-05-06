@@ -72,7 +72,7 @@ function ClickHandler({ onMapClick }: { onMapClick?: (lat: number, lng: number) 
 export default function MapView({
   markers,
   user,
-  fallbackCenter = [52.0907, 5.1214], // Utrecht
+  fallbackCenter = [51.2087, 3.2247], // Bruges (Belfry)
   className,
   onMapClick,
   big,

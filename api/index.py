@@ -227,6 +227,19 @@ def start_game(
     return game
 
 
+@app.post("/api/games/{game_id}/stop", response_model=schemas.GameHostOut)
+def stop_game(
+    game_id: int,
+    x_host_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    game = _require_host(db, game_id, x_host_token)
+    game.started = False
+    db.commit()
+    db.refresh(game)
+    return game
+
+
 # ---------- host: locations ----------
 
 @app.post("/api/games/{game_id}/locations", response_model=schemas.LocationHostOut)
@@ -363,13 +376,35 @@ def reassign_team_actions(
 
 @app.post("/api/teams/join", response_model=schemas.TeamSession)
 def join_game(payload: schemas.TeamJoinIn, db: Session = Depends(get_db)):
+    """Join a game by code, or rejoin an existing team by exact name match.
+
+    Anyone with the join code + a team's name can recover that team's session
+    (e.g. after clearing localStorage or switching devices). Same-name collisions
+    in a game are not allowed — second poster would resume the first team.
+    """
     code = (payload.join_code or "").strip().upper()
+    name = payload.name.strip()[:80] or "Team"
     game = db.query(models.Game).filter(models.Game.join_code == code).first()
     if not game:
         raise HTTPException(status_code=404, detail="Unknown join code")
+
+    existing = db.query(models.Team).filter(
+        models.Team.game_id == game.id, models.Team.name == name
+    ).first()
+    if existing:
+        # Rejoin: keep token, color, progress, and assigned actions.
+        return schemas.TeamSession(
+            team_id=existing.id,
+            team_token=existing.token,
+            team_name=existing.name,
+            color=existing.color,
+            game_id=game.id,
+            game_name=game.name,
+        )
+
     team = models.Team(
         game_id=game.id,
-        name=payload.name.strip()[:80] or "Team",
+        name=name,
         color=payload.color or "#D04A02",
         token=_token(),
     )

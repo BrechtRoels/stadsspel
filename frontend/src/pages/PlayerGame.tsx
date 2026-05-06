@@ -135,14 +135,19 @@ export default function PlayerGame() {
             const distance = pos ? haversineMeters(pos.lat, pos.lng, l.lat, l.lng) : null;
             const inRange = distance != null && distance <= l.radius_m;
             return (
-              <li key={l.id} className="loc-row">
-                <div>
+              <li key={l.id} className="loc-row" style={{ alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
                   <div className="loc-row__title">{l.name}</div>
                   <div className="loc-row__meta">
                     {distance == null
                       ? "—"
                       : `${Math.round(distance)} m away (radius ${l.radius_m} m)`}
                   </div>
+                  {l.hint && (
+                    <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 4 }}>
+                      <strong>Hint:</strong> {l.hint}
+                    </div>
+                  )}
                 </div>
                 <div className="row">
                   {solved ? (

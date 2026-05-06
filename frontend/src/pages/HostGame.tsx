@@ -3,16 +3,19 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   Action, HostDashboard, LocationHost, addAction, addLocation, deleteAction,
   deleteLocation, getHostDashboard, hostToggleTeamAction, reassignActions,
-  startGame, updateAction, updateGame, updateLocation,
+  startGame, stopGame, updateAction, updateGame, updateLocation,
 } from "../api";
 import MapView, { MapMarker } from "../components/MapView";
 
 type Tab = "setup" | "live";
 
+// Bruges, Belfry on the Markt.
+const DEFAULT_CENTER: [number, number] = [51.2087, 3.2247];
+
 const blankLoc: Omit<LocationHost, "id"> = {
   name: "",
-  lat: 52.0907,
-  lng: 5.1214,
+  lat: DEFAULT_CENTER[0],
+  lng: DEFAULT_CENTER[1],
   radius_m: 40,
   question: "",
   answer: "",
@@ -81,6 +84,10 @@ export default function HostGame() {
   async function startNow() {
     try { await startGame(id, hostToken); reload(); } catch (e: any) { setErr(e.message); }
   }
+  async function stopNow() {
+    if (!confirm("Stop the game? Teams will see it as no longer live; you can resume any time.")) return;
+    try { await stopGame(id, hostToken); reload(); } catch (e: any) { setErr(e.message); }
+  }
 
   function openNewLoc() {
     setEditingId(null);
@@ -125,7 +132,10 @@ export default function HostGame() {
           <span className="muted">Join code:</span>
           <span className="code-pill">{game.join_code}</span>
           {game.started ? (
-            <span className="banner banner--good" style={{ padding: "4px 10px" }}>Live</span>
+            <>
+              <span className="banner banner--good" style={{ padding: "4px 10px" }}>Live</span>
+              <button className="btn btn--ghost btn--small" onClick={stopNow}>Stop</button>
+            </>
           ) : (
             <button className="btn btn--small" onClick={startNow}>Start game</button>
           )}
@@ -159,7 +169,15 @@ export default function HostGame() {
             setErr={setErr}
           />
         ) : (
-          <LiveTab data={data} gameId={id} hostToken={hostToken} reload={reload} setErr={setErr} />
+          <LiveTab
+            data={data}
+            gameId={id}
+            hostToken={hostToken}
+            reload={reload}
+            setErr={setErr}
+            onAddLocation={openNewLoc}
+            goToSetup={() => setTab("setup")}
+          />
         )}
       </div>
 
@@ -204,11 +222,11 @@ function SetupTab(props: {
         </div>
         <div>
           <label>Final latitude</label>
-          <input value={meta.final_lat} onChange={e => setMeta({ ...meta, final_lat: e.target.value })} placeholder="52.0907" />
+          <input value={meta.final_lat} onChange={e => setMeta({ ...meta, final_lat: e.target.value })} placeholder="51.2087" />
         </div>
         <div>
           <label>Final longitude</label>
-          <input value={meta.final_lng} onChange={e => setMeta({ ...meta, final_lng: e.target.value })} placeholder="5.1214" />
+          <input value={meta.final_lng} onChange={e => setMeta({ ...meta, final_lng: e.target.value })} placeholder="3.2247" />
         </div>
       </div>
       <div className="row">
@@ -345,8 +363,10 @@ function LiveTab(props: {
   hostToken: string;
   reload: () => void;
   setErr: (s: string) => void;
+  onAddLocation: () => void;
+  goToSetup: () => void;
 }) {
-  const { data, gameId, hostToken, reload, setErr } = props;
+  const { data, gameId, hostToken, reload, setErr, onAddLocation, goToSetup } = props;
   const { game, teams, progress_matrix } = data;
   const [openTeamId, setOpenTeamId] = useState<number | null>(null);
   const [showLocDetail, setShowLocDetail] = useState(false);
@@ -477,6 +497,11 @@ function LiveTab(props: {
         <button className="btn btn--ghost btn--small" onClick={() => setShowLocDetail(s => !s)}>
           {showLocDetail ? "Hide answers" : "Show answers"}
         </button>
+        <button className="btn btn--small" onClick={onAddLocation}>+ Add location</button>
+        <button className="btn btn--ghost btn--small" onClick={goToSetup}>Edit in Setup</button>
+      </div>
+      <div className="muted" style={{ fontSize: 12, marginTop: -4 }}>
+        You can add or edit locations and actions any time, even while the game is live — teams will see updates on their next refresh.
       </div>
       <ul className="loc-list">
         {game.locations.map(l => (
@@ -489,17 +514,15 @@ function LiveTab(props: {
               <div className="loc-row__meta" style={{ marginTop: 4, color: "var(--text)" }}>
                 <strong>Q:</strong> {l.question}
               </div>
+              {l.hint && (
+                <div className="loc-row__meta" style={{ color: "var(--warn)" }}>
+                  <strong>Hint:</strong> {l.hint}
+                </div>
+              )}
               {showLocDetail && (
-                <>
-                  <div className="loc-row__meta" style={{ color: "var(--good)" }}>
-                    <strong>A:</strong> {l.answer}
-                  </div>
-                  {l.hint && (
-                    <div className="loc-row__meta" style={{ color: "var(--warn)" }}>
-                      <strong>Hint:</strong> {l.hint}
-                    </div>
-                  )}
-                </>
+                <div className="loc-row__meta" style={{ color: "var(--good)" }}>
+                  <strong>A:</strong> {l.answer}
+                </div>
               )}
             </div>
             <a
@@ -512,6 +535,30 @@ function LiveTab(props: {
         ))}
         {game.locations.length === 0 && <div className="muted">No locations configured.</div>}
       </ul>
+
+      {game.locations.some(l => l.hint) && (
+        <>
+          <h2 style={{ marginTop: 8 }}>Hints cheat-sheet</h2>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            Quick reference for what to share if a team is stuck. Only locations with a hint are shown.
+          </div>
+          <ul className="loc-list">
+            {game.locations.filter(l => l.hint).map(l => (
+              <li key={l.id} className="loc-row" style={{ alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div className="loc-row__title">{l.name}</div>
+                  <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 2 }}>{l.hint}</div>
+                </div>
+                <button
+                  className="btn btn--ghost btn--small"
+                  onClick={() => { navigator.clipboard?.writeText(l.hint || ""); }}
+                  title="Copy hint to clipboard"
+                >Copy</button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }

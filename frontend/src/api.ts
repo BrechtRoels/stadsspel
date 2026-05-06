@@ -21,6 +21,7 @@ export type LocationPublic = {
   lng: number;
   radius_m: number;
   order_idx: number;
+  hint?: string | null;
 };
 
 export type Action = { id: number; text: string };
@@ -132,6 +133,9 @@ export const updateGame = (
 
 export const startGame = (gameId: number, hostToken: string) =>
   req<GameHost>(`/api/games/${gameId}/start`, { method: "POST", hostToken });
+
+export const stopGame = (gameId: number, hostToken: string) =>
+  req<GameHost>(`/api/games/${gameId}/stop`, { method: "POST", hostToken });
 
 export const getHostDashboard = (gameId: number, hostToken: string) =>
   req<HostDashboard>(`/api/games/${gameId}/host`, { hostToken });

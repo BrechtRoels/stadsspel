@@ -29,6 +29,10 @@ export default function PlayerJoin() {
     <div className="app">
       <div className="card">
         <h1>Join a game</h1>
+        <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+          New here? Pick a team name. <br />
+          Already played and lost the page? Enter the same code and team name to continue.
+        </div>
         <form className="stack" onSubmit={submit}>
           <div>
             <label>Game code</label>
