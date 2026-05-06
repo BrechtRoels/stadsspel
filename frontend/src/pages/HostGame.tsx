@@ -308,9 +308,11 @@ function ActionsEditor(props: {
   setErr: (s: string) => void;
 }) {
   const { gameId, hostToken, actions, teamCount, teamsWithActions, reload, setErr } = props;
-  const [draft, setDraft] = useState("");
+  const [draftText, setDraftText] = useState("");
+  const [draftHint, setDraftHint] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
+  const [editingHint, setEditingHint] = useState("");
 
   const initialReveal = teamsWithActions === 0;
   const revealLabel = initialReveal
@@ -318,16 +320,22 @@ function ActionsEditor(props: {
     : "Top up team actions";
 
   async function add() {
-    const t = draft.trim();
+    const t = draftText.trim();
     if (!t) return;
-    try { await addAction(gameId, hostToken, t); setDraft(""); reload(); }
-    catch (e: any) { setErr(e.message); }
+    try {
+      await addAction(gameId, hostToken, t, draftHint.trim() || null);
+      setDraftText(""); setDraftHint("");
+      reload();
+    } catch (e: any) { setErr(e.message); }
   }
   async function save(id: number) {
     const t = editingText.trim();
     if (!t) return;
-    try { await updateAction(gameId, id, hostToken, t); setEditingId(null); reload(); }
-    catch (e: any) { setErr(e.message); }
+    try {
+      await updateAction(gameId, id, hostToken, t, editingHint.trim() || null);
+      setEditingId(null);
+      reload();
+    } catch (e: any) { setErr(e.message); }
   }
   async function remove(id: number) {
     if (!confirm("Delete this action?")) return;
@@ -344,22 +352,40 @@ function ActionsEditor(props: {
 
   return (
     <div className="stack">
-      <div className="row">
+      <div className="stack stack--tight">
         <input
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          placeholder="e.g. Take a selfie with a stranger"
+          value={draftText}
+          onChange={e => setDraftText(e.target.value)}
+          placeholder="Action — e.g. Take a selfie with a stranger"
           onKeyDown={e => { if (e.key === "Enter") add(); }}
         />
-        <button className="btn" onClick={add} disabled={!draft.trim()}>Add</button>
+        <div className="row">
+          <input
+            value={draftHint}
+            onChange={e => setDraftHint(e.target.value)}
+            placeholder="Hint shown to the team (optional)"
+            onKeyDown={e => { if (e.key === "Enter") add(); }}
+          />
+          <button className="btn" onClick={add} disabled={!draftText.trim()}>Add</button>
+        </div>
       </div>
       <ul className="loc-list">
         {actions.map(a => (
-          <li key={a.id} className="loc-row">
+          <li key={a.id} className="loc-row" style={{ alignItems: "flex-start" }}>
             {editingId === a.id ? (
-              <input value={editingText} onChange={e => setEditingText(e.target.value)} autoFocus />
+              <div className="stack stack--tight" style={{ flex: 1 }}>
+                <input value={editingText} onChange={e => setEditingText(e.target.value)} autoFocus placeholder="Action" />
+                <input value={editingHint} onChange={e => setEditingHint(e.target.value)} placeholder="Hint (optional)" />
+              </div>
             ) : (
-              <div className="loc-row__title" style={{ fontWeight: 500 }}>{a.text}</div>
+              <div style={{ flex: 1 }}>
+                <div className="loc-row__title" style={{ fontWeight: 500 }}>{a.text}</div>
+                {a.hint && (
+                  <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 2 }}>
+                    Hint: {a.hint}
+                  </div>
+                )}
+              </div>
             )}
             <div className="row">
               {editingId === a.id ? (
@@ -369,7 +395,11 @@ function ActionsEditor(props: {
                 </>
               ) : (
                 <>
-                  <button className="btn btn--ghost btn--small" onClick={() => { setEditingId(a.id); setEditingText(a.text); }}>Edit</button>
+                  <button className="btn btn--ghost btn--small" onClick={() => {
+                    setEditingId(a.id);
+                    setEditingText(a.text);
+                    setEditingHint(a.hint ?? "");
+                  }}>Edit</button>
                   <button className="btn btn--danger btn--small" onClick={() => remove(a.id)}>Del</button>
                 </>
               )}
@@ -471,13 +501,18 @@ function LiveTab(props: {
           <ul className="loc-list">
             {pendingByTeam.flatMap(({ team, pending }) =>
               pending.map(a => (
-                <li key={`${team.id}-${a.id}`} className="loc-row">
-                  <div>
+                <li key={`${team.id}-${a.id}`} className="loc-row" style={{ alignItems: "flex-start" }}>
+                  <div style={{ flex: 1 }}>
                     <div className="loc-row__title">
                       <span className="dot" style={{ background: team.color, marginRight: 8 }} />
                       {team.name}
                     </div>
                     <div className="loc-row__meta">{a.text}</div>
+                    {a.hint && (
+                      <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 2 }}>
+                        Hint: {a.hint}
+                      </div>
+                    )}
                   </div>
                   <button className="btn btn--small" onClick={() => approve(team.id, a.id)}>Approve</button>
                 </li>

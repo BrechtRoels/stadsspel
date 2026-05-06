@@ -88,6 +88,7 @@ class Action(Base):
     id = Column(Integer, primary_key=True)
     game_id = Column(Integer, ForeignKey("games.id", ondelete="CASCADE"), nullable=False, index=True)
     text = Column(Text, nullable=False)
+    hint = Column(Text, nullable=True)
 
     game = relationship("Game", back_populates="actions")
 

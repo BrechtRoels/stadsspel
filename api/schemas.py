@@ -47,11 +47,13 @@ class GameCreate(BaseModel):
 
 class ActionIn(BaseModel):
     text: str
+    hint: Optional[str] = None
 
 
 class ActionOut(BaseModel):
     id: int
     text: str
+    hint: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -87,6 +89,7 @@ class TeamActionOut(BaseModel):
     id: int  # team_action id
     action_id: int
     text: str
+    hint: Optional[str] = None
     completed: bool
     completed_at: Optional[datetime] = None
 

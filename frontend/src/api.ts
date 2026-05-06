@@ -25,12 +25,13 @@ export type LocationPublic = {
   has_hint?: boolean;
 };
 
-export type Action = { id: number; text: string };
+export type Action = { id: number; text: string; hint?: string | null };
 
 export type TeamAction = {
   id: number;          // team_action id
   action_id: number;
   text: string;
+  hint?: string | null;
   completed: boolean;
   completed_at?: string | null;
 };
@@ -162,11 +163,15 @@ export const updateLocation = (gameId: number, locId: number, hostToken: string,
 export const deleteLocation = (gameId: number, locId: number, hostToken: string) =>
   req<void>(`/api/games/${gameId}/locations/${locId}`, { method: "DELETE", hostToken });
 
-export const addAction = (gameId: number, hostToken: string, text: string) =>
-  req<Action>(`/api/games/${gameId}/actions`, { body: { text }, hostToken });
+export const addAction = (gameId: number, hostToken: string, text: string, hint?: string | null) =>
+  req<Action>(`/api/games/${gameId}/actions`, { body: { text, hint: hint || null }, hostToken });
 
-export const updateAction = (gameId: number, actionId: number, hostToken: string, text: string) =>
-  req<Action>(`/api/games/${gameId}/actions/${actionId}`, { method: "PUT", body: { text }, hostToken });
+export const updateAction = (gameId: number, actionId: number, hostToken: string, text: string, hint?: string | null) =>
+  req<Action>(`/api/games/${gameId}/actions/${actionId}`, {
+    method: "PUT",
+    body: { text, hint: hint || null },
+    hostToken,
+  });
 
 export const deleteAction = (gameId: number, actionId: number, hostToken: string) =>
   req<void>(`/api/games/${gameId}/actions/${actionId}`, { method: "DELETE", hostToken });

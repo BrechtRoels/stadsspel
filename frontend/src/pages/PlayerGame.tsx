@@ -190,8 +190,15 @@ export default function PlayerGame() {
             </div>
             <ul className="loc-list">
               {state.actions.map(a => (
-                <li key={a.id} className="loc-row" style={{ opacity: a.completed ? 0.85 : 1 }}>
-                  <span style={{ textDecoration: a.completed ? "line-through" : "none" }}>{a.text}</span>
+                <li key={a.id} className="loc-row" style={{ opacity: a.completed ? 0.85 : 1, alignItems: "flex-start" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ textDecoration: a.completed ? "line-through" : "none" }}>{a.text}</div>
+                    {a.hint && (
+                      <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 4 }}>
+                        Hint: {a.hint}
+                      </div>
+                    )}
+                  </div>
                   <span className={`distance-tag ${a.completed ? "distance-tag--done" : "distance-tag--out"}`}>
                     {a.completed ? "✓ Approved" : "Pending"}
                   </span>

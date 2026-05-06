@@ -31,6 +31,24 @@ from db import Base, engine, get_db
 # Auto-create tables on cold start. Fine for SQLite/Postgres at this scale.
 Base.metadata.create_all(bind=engine)
 
+
+def _migrate_additive() -> None:
+    """Add columns the ORM expects but the existing DB might be missing.
+
+    Idempotent: only adds columns that don't exist yet. No drops, no renames.
+    Works for both SQLite and Postgres.
+    """
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    if "actions" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("actions")}
+        if "hint" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE actions ADD COLUMN hint TEXT"))
+
+
+_migrate_additive()
+
 app = FastAPI(title="Stadsspel API", version="0.1.0")
 
 app.add_middleware(
@@ -94,6 +112,7 @@ def _team_action_views(team: models.Team) -> List[schemas.TeamActionOut]:
             id=ta.id,
             action_id=ta.action_id,
             text=ta.action.text if ta.action else "",
+            hint=(ta.action.hint if ta.action else None),
             completed=bool(ta.completed),
             completed_at=ta.completed_at,
         ))
@@ -309,7 +328,8 @@ def add_action(
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Action text is required")
-    action = models.Action(game_id=game_id, text=text)
+    hint = (payload.hint or "").strip() or None
+    action = models.Action(game_id=game_id, text=text, hint=hint)
     db.add(action)
     db.commit()
     db.refresh(action)
@@ -334,6 +354,7 @@ def update_action(
     if not text:
         raise HTTPException(status_code=400, detail="Action text is required")
     a.text = text
+    a.hint = (payload.hint or "").strip() or None
     db.commit()
     db.refresh(a)
     return a
