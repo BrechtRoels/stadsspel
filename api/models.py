@@ -1,0 +1,106 @@
+import os
+import sys
+from datetime import datetime
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from sqlalchemy import (
+    Column, Integer, String, Float, ForeignKey, DateTime, Boolean, Text, UniqueConstraint
+)
+from sqlalchemy.orm import relationship
+from db import Base
+
+
+class Game(Base):
+    __tablename__ = "games"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False)
+    host_token = Column(String(64), nullable=False, unique=True, index=True)
+    join_code = Column(String(12), nullable=False, unique=True, index=True)
+    final_lat = Column(Float, nullable=True)
+    final_lng = Column(Float, nullable=True)
+    final_label = Column(String(200), nullable=True)
+    started = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    locations = relationship("Location", back_populates="game", cascade="all, delete-orphan", order_by="Location.order_idx")
+    teams = relationship("Team", back_populates="game", cascade="all, delete-orphan")
+    actions = relationship("Action", back_populates="game", cascade="all, delete-orphan", order_by="Action.id")
+
+
+class Location(Base):
+    __tablename__ = "locations"
+
+    id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    lat = Column(Float, nullable=False)
+    lng = Column(Float, nullable=False)
+    radius_m = Column(Integer, default=40, nullable=False)
+    question = Column(Text, nullable=False)
+    answer = Column(String(200), nullable=False)
+    fragment = Column(String(200), nullable=False, default="")
+    hint = Column(Text, nullable=True)
+    order_idx = Column(Integer, default=0, nullable=False)
+
+    game = relationship("Game", back_populates="locations")
+
+
+class Team(Base):
+    __tablename__ = "teams"
+
+    id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(80), nullable=False)
+    color = Column(String(20), default="#D04A02")
+    token = Column(String(64), nullable=False, unique=True, index=True)
+    last_lat = Column(Float, nullable=True)
+    last_lng = Column(Float, nullable=True)
+    last_seen = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    game = relationship("Game", back_populates="teams")
+    progress = relationship("Progress", back_populates="team", cascade="all, delete-orphan")
+    actions = relationship("TeamAction", back_populates="team", cascade="all, delete-orphan")
+
+
+class Progress(Base):
+    __tablename__ = "progress"
+    __table_args__ = (UniqueConstraint("team_id", "location_id", name="uq_team_location"),)
+
+    id = Column(Integer, primary_key=True)
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
+    location_id = Column(Integer, ForeignKey("locations.id", ondelete="CASCADE"), nullable=False, index=True)
+    solved = Column(Boolean, default=False)
+    attempts = Column(Integer, default=0)
+    solved_at = Column(DateTime, nullable=True)
+
+    team = relationship("Team", back_populates="progress")
+    location = relationship("Location")
+
+
+class Action(Base):
+    __tablename__ = "actions"
+
+    id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.id", ondelete="CASCADE"), nullable=False, index=True)
+    text = Column(Text, nullable=False)
+
+    game = relationship("Game", back_populates="actions")
+
+
+class TeamAction(Base):
+    __tablename__ = "team_actions"
+    __table_args__ = (UniqueConstraint("team_id", "action_id", name="uq_team_action"),)
+
+    id = Column(Integer, primary_key=True)
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
+    action_id = Column(Integer, ForeignKey("actions.id", ondelete="CASCADE"), nullable=False, index=True)
+    completed = Column(Boolean, default=False, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+    team = relationship("Team", back_populates="actions")
+    action = relationship("Action")

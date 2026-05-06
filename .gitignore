@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.db
+*.db-journal
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Vercel
+.vercel/
+
+# OS
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
