@@ -22,6 +22,7 @@ export type LocationPublic = {
   radius_m: number;
   order_idx: number;
   hint?: string | null;
+  has_hint?: boolean;
 };
 
 export type Action = { id: number; text: string };
@@ -110,11 +111,23 @@ async function req<T>(
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   if (!res.ok) {
-    let detail = `${res.status}`;
+    let detail: any = `${res.status}`;
     try {
       const j = await res.json();
-      detail = j.detail || detail;
+      if (j?.detail !== undefined) detail = j.detail;
     } catch {}
+    // FastAPI 422 returns detail as an array of validation errors. Format it
+    // so we get something useful instead of the JS default "[object Object]".
+    if (Array.isArray(detail)) {
+      detail = detail
+        .map((d: any) => {
+          const where = Array.isArray(d?.loc) ? d.loc.join(".") : "";
+          return where ? `${where}: ${d?.msg ?? d}` : (d?.msg ?? JSON.stringify(d));
+        })
+        .join("; ");
+    } else if (typeof detail !== "string") {
+      detail = JSON.stringify(detail);
+    }
     throw new Error(detail);
   }
   if (res.status === 204) return undefined as T;
@@ -172,7 +185,7 @@ export const teamPing = (teamId: number, teamToken: string, lat: number, lng: nu
   req<{ ok: boolean }>(`/api/teams/${teamId}/ping`, { body: { lat, lng }, teamToken });
 
 export const fetchQuestion = (teamId: number, teamToken: string, locationId: number) =>
-  req<{ location_id: number; name: string; question: string; hint?: string | null; attempts: number; distance_m: number; already_solved?: boolean; fragment?: string }>(
+  req<{ location_id: number; name: string; question: string; hint?: string | null; has_hint?: boolean; attempts: number; distance_m: number; already_solved?: boolean; fragment?: string }>(
     `/api/teams/${teamId}/question?location_id=${locationId}`,
     { teamToken }
   );

@@ -21,7 +21,12 @@ class LocationHostOut(LocationIn):
 
 
 class LocationPublicOut(BaseModel):
-    """What players see — no answer leaked."""
+    """What players see — no answer leaked.
+
+    `hint` is filled only when the team has unlocked it (approved actions ≥
+    this location's index in order). `has_hint` tells the UI whether a hint
+    exists at all, so it can show a "locked" placeholder when appropriate.
+    """
     id: int
     name: str
     lat: float
@@ -29,6 +34,7 @@ class LocationPublicOut(BaseModel):
     radius_m: int
     order_idx: int
     hint: Optional[str] = None
+    has_hint: bool = False
     model_config = ConfigDict(from_attributes=True)
 
 

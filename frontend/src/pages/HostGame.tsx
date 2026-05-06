@@ -100,13 +100,12 @@ export default function HostGame() {
     setDraft(rest);
   }
 
-  async function saveLoc() {
-    if (!draft) return;
+  async function saveLoc(payload: Omit<LocationHost, "id">) {
     try {
       if (editingId == null) {
-        await addLocation(id, hostToken, draft);
+        await addLocation(id, hostToken, payload);
       } else {
-        await updateLocation(id, editingId, hostToken, draft);
+        await updateLocation(id, editingId, hostToken, payload);
       }
       setDraft(null);
       setEditingId(null);
@@ -265,7 +264,7 @@ function SetupTab(props: {
 
       <h2 style={{ marginTop: 16 }}>Actions pool</h2>
       <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-        Build the pool first, then click <em>Reveal actions</em> when you're ready. Each team gets 3 random actions from the pool. Players don't see anything until you reveal.
+        Build the pool first, then click <em>Reveal actions</em> when you're ready. Each team gets 3 random actions from the pool. Players don't see anything until you reveal — and each approved action unlocks one location's hint, in order.
       </div>
       <ActionsEditor
         gameId={gameId}
@@ -623,11 +622,40 @@ function LocationModal(props: {
   draft: Omit<LocationHost, "id">;
   setDraft: (d: Omit<LocationHost, "id">) => void;
   onClose: () => void;
-  onSave: () => void;
+  onSave: (payload: Omit<LocationHost, "id">) => void;
   editing: boolean;
 }) {
   const { draft, setDraft, onClose, onSave, editing } = props;
   const set = (k: keyof Omit<LocationHost, "id">, v: any) => setDraft({ ...draft, [k]: v });
+  // For numeric inputs we keep a parallel string buffer so the user can clear
+  // and retype without us writing 0/NaN into the draft mid-edit.
+  const [latStr, setLatStr] = useState(String(draft.lat));
+  const [lngStr, setLngStr] = useState(String(draft.lng));
+  const [radiusStr, setRadiusStr] = useState(String(draft.radius_m));
+  const [orderStr, setOrderStr] = useState(String(draft.order_idx));
+  const [validationErr, setValidationErr] = useState("");
+
+  // When the map is clicked, push fresh coords into both draft and the buffers.
+  function onMapClick(lat: number, lng: number) {
+    setDraft({ ...draft, lat, lng });
+    setLatStr(String(lat));
+    setLngStr(String(lng));
+  }
+
+  function trySave() {
+    const lat = Number(latStr), lng = Number(lngStr);
+    const radius = Number(radiusStr), order = Number(orderStr);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90)
+      return setValidationErr("Latitude must be a number between -90 and 90.");
+    if (!Number.isFinite(lng) || lng < -180 || lng > 180)
+      return setValidationErr("Longitude must be a number between -180 and 180.");
+    if (!Number.isFinite(radius) || radius < 5 || radius > 2000)
+      return setValidationErr("Radius must be between 5 and 2000 metres.");
+    if (!Number.isFinite(order) || order < 0)
+      return setValidationErr("Order must be 0 or a positive integer.");
+    setValidationErr("");
+    onSave({ ...draft, lat, lng, radius_m: Math.round(radius), order_idx: Math.round(order) });
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -641,11 +669,11 @@ function LocationModal(props: {
           <div className="grid-2">
             <div>
               <label>Latitude</label>
-              <input type="number" step="any" value={draft.lat} onChange={e => set("lat", Number(e.target.value))} />
+              <input type="number" step="any" value={latStr} onChange={e => setLatStr(e.target.value)} />
             </div>
             <div>
               <label>Longitude</label>
-              <input type="number" step="any" value={draft.lng} onChange={e => set("lng", Number(e.target.value))} />
+              <input type="number" step="any" value={lngStr} onChange={e => setLngStr(e.target.value)} />
             </div>
           </div>
           <div className="muted" style={{ fontSize: 12 }}>
@@ -653,16 +681,16 @@ function LocationModal(props: {
           </div>
           <MapView
             markers={[{ id: "draft", lat: draft.lat, lng: draft.lng, radius_m: draft.radius_m, showRadius: true }]}
-            onMapClick={(lat, lng) => setDraft({ ...draft, lat, lng })}
+            onMapClick={onMapClick}
           />
           <div className="grid-2">
             <div>
               <label>Trigger radius (meters)</label>
-              <input type="number" value={draft.radius_m} onChange={e => set("radius_m", Number(e.target.value))} />
+              <input type="number" min={5} max={2000} value={radiusStr} onChange={e => setRadiusStr(e.target.value)} />
             </div>
             <div>
               <label>Order</label>
-              <input type="number" value={draft.order_idx} onChange={e => set("order_idx", Number(e.target.value))} />
+              <input type="number" min={0} value={orderStr} onChange={e => setOrderStr(e.target.value)} />
             </div>
           </div>
           <div>
@@ -674,17 +702,18 @@ function LocationModal(props: {
             <input value={draft.answer} onChange={e => set("answer", e.target.value)} />
           </div>
           <div>
-            <label>Hint (optional)</label>
+            <label>Hint (optional) — unlocks for teams as they get actions approved</label>
             <input value={draft.hint ?? ""} onChange={e => set("hint", e.target.value)} />
           </div>
           <div>
             <label>Coordinate fragment unlocked on solve</label>
             <input value={draft.fragment} onChange={e => set("fragment", e.target.value)} placeholder="e.g. lat=52.09 or '4th digit: 7'" />
           </div>
+          {validationErr && <div className="banner banner--bad">{validationErr}</div>}
           <div className="row">
             <button className="btn btn--ghost" onClick={onClose}>Cancel</button>
             <div className="spacer" />
-            <button className="btn" onClick={onSave} disabled={!draft.name || !draft.question || !draft.answer}>
+            <button className="btn" onClick={trySave} disabled={!draft.name || !draft.question || !draft.answer}>
               {editing ? "Save changes" : "Add location"}
             </button>
           </div>

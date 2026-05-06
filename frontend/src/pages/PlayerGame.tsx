@@ -19,7 +19,7 @@ export default function PlayerGame() {
   const [geoErr, setGeoErr] = useState("");
   const [err, setErr] = useState("");
   const [q, setQ] = useState<{
-    location_id: number; name: string; question: string; hint?: string | null; attempts: number; distance_m: number;
+    location_id: number; name: string; question: string; hint?: string | null; has_hint?: boolean; attempts: number; distance_m: number;
   } | null>(null);
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -143,11 +143,15 @@ export default function PlayerGame() {
                       ? "—"
                       : `${Math.round(distance)} m away (radius ${l.radius_m} m)`}
                   </div>
-                  {l.hint && (
+                  {l.hint ? (
                     <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 4 }}>
                       <strong>Hint:</strong> {l.hint}
                     </div>
-                  )}
+                  ) : l.has_hint ? (
+                    <div className="loc-row__meta muted" style={{ marginTop: 4 }}>
+                      🔒 Hint locked — get more actions approved to unlock.
+                    </div>
+                  ) : null}
                 </div>
                 <div className="row">
                   {solved ? (
@@ -237,7 +241,11 @@ export default function PlayerGame() {
             <h2>{q.name}</h2>
             <div className="muted" style={{ marginBottom: 8 }}>Within {q.distance_m}m · attempts: {q.attempts}</div>
             <p style={{ whiteSpace: "pre-wrap" }}>{q.question}</p>
-            {q.hint && <div className="banner banner--warn" style={{ marginBottom: 12 }}>Hint: {q.hint}</div>}
+            {q.hint
+              ? <div className="banner banner--warn" style={{ marginBottom: 12 }}>Hint: {q.hint}</div>
+              : q.has_hint
+                ? <div className="banner banner--warn" style={{ marginBottom: 12 }}>🔒 A hint exists for this location but isn't unlocked yet — get more actions approved.</div>
+                : null}
             <div>
               <label>Your answer</label>
               <input value={answer} onChange={e => setAnswer(e.target.value)} autoFocus />

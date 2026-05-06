@@ -444,12 +444,29 @@ def _state_for(db: Session, team: models.Team) -> schemas.TeamStateOut:
                 fragment=(loc.fragment if solved else None),
             )
         )
+
+    # Each approved action unlocks one hint, in location order_idx order.
+    approved_count = sum(1 for ta in team.actions if ta.completed)
+    public_locs: List[schemas.LocationPublicOut] = []
+    for idx, loc in enumerate(locs):
+        unlocked = idx < approved_count
+        public_locs.append(schemas.LocationPublicOut(
+            id=loc.id,
+            name=loc.name,
+            lat=loc.lat,
+            lng=loc.lng,
+            radius_m=loc.radius_m,
+            order_idx=loc.order_idx,
+            has_hint=bool(loc.hint),
+            hint=(loc.hint if (loc.hint and unlocked) else None),
+        ))
+
     return schemas.TeamStateOut(
         team_id=team.id,
         team_name=team.name,
         color=team.color,
         game_name=game.name,
-        locations=[schemas.LocationPublicOut.model_validate(l) for l in locs],
+        locations=public_locs,
         progress=items,
         actions=_team_action_views(team),
         final_lat=(game.final_lat if all_solved else None),
@@ -541,11 +558,18 @@ def get_question(
             detail=f"Out of range ({int(distance)}m, need ≤{loc.radius_m}m)",
         )
 
+    # Hint is only revealed if this location's index is unlocked by approved actions.
+    locs_in_order = sorted(team.game.locations, key=lambda l: (l.order_idx, l.id))
+    loc_idx = next((i for i, l in enumerate(locs_in_order) if l.id == loc.id), None)
+    approved_count = sum(1 for ta in team.actions if ta.completed)
+    hint_unlocked = loc_idx is not None and loc_idx < approved_count
+
     return {
         "location_id": loc.id,
         "name": loc.name,
         "question": loc.question,
-        "hint": loc.hint,
+        "hint": (loc.hint if (loc.hint and hint_unlocked) else None),
+        "has_hint": bool(loc.hint),
         "attempts": prog.attempts if prog else 0,
         "distance_m": int(distance),
     }
