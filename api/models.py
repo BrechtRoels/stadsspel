@@ -20,6 +20,9 @@ class Game(Base):
     name = Column(String(120), nullable=False)
     host_token = Column(String(64), nullable=False, unique=True, index=True)
     join_code = Column(String(12), nullable=False, unique=True, index=True)
+    # Optional password gate. Anyone with the host_token AND this password
+    # can host. Stored as a PBKDF2 hash; null means no password set.
+    password_hash = Column(String(255), nullable=True)
     final_lat = Column(Float, nullable=True)
     final_lng = Column(Float, nullable=True)
     final_label = Column(String(200), nullable=True)

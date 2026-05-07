@@ -47,6 +47,8 @@ class GameCreate(BaseModel):
     final_lat: Optional[float] = None
     final_lng: Optional[float] = None
     final_label: Optional[str] = None
+    # Only honored at creation. Use POST /api/games/{id}/password to change later.
+    password: Optional[str] = None
 
 
 class HostRecoverIn(BaseModel):
@@ -57,6 +59,12 @@ class HostRecoverOut(BaseModel):
     game_id: int
     name: str
     join_code: str
+    has_password: bool = False
+
+
+class PasswordSetIn(BaseModel):
+    """null/empty clears the password; non-empty replaces it."""
+    password: Optional[str] = None
 
 
 class ActionIn(BaseModel):
@@ -82,9 +90,28 @@ class GameHostOut(BaseModel):
     final_lng: Optional[float] = None
     final_label: Optional[str] = None
     started: bool
+    has_password: bool = False
     locations: List[LocationHostOut] = []
     actions: List[ActionOut] = []
     model_config = ConfigDict(from_attributes=True)
+
+    @classmethod
+    def from_orm_game(cls, game) -> "GameHostOut":
+        # Pydantic v2 + from_attributes can't compute has_password from a non-attribute,
+        # so we build manually.
+        return cls.model_validate({
+            "id": game.id,
+            "name": game.name,
+            "join_code": game.join_code,
+            "host_token": game.host_token,
+            "final_lat": game.final_lat,
+            "final_lng": game.final_lng,
+            "final_label": game.final_label,
+            "started": bool(game.started),
+            "has_password": bool(game.password_hash),
+            "locations": game.locations,
+            "actions": game.actions,
+        })
 
 
 class GamePublicOut(BaseModel):

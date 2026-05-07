@@ -4,6 +4,8 @@ Vercel's @vercel/python runtime imports this file directly (not as part of an
 `api` package), so we use absolute imports and ensure the directory is on
 sys.path. Locally, run with: `uvicorn --app-dir api index:app --reload`.
 """
+import hashlib
+import hmac
 import math
 import os
 import random
@@ -52,6 +54,11 @@ def _migrate_additive() -> None:
         if "position" not in cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE progress ADD COLUMN position INTEGER"))
+    if "games" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("games")}
+        if "password_hash" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE games ADD COLUMN password_hash TEXT"))
 
 
 _migrate_additive()
@@ -92,7 +99,32 @@ def _norm_answer(s: str) -> str:
     return "".join(ch.lower() for ch in (s or "").strip() if ch.isalnum())
 
 
-def _require_host(db: Session, game_id: int, token: str) -> models.Game:
+# ---------- password hashing (stdlib only) ----------
+
+_PBKDF2_ITERS = 120_000
+
+
+def _hash_password(password: str) -> str:
+    """PBKDF2-HMAC-SHA256, 120k iterations. Format: pbkdf2_sha256$iters$salt$hash."""
+    salt = secrets.token_bytes(16)
+    h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ITERS)
+    return f"pbkdf2_sha256${_PBKDF2_ITERS}${salt.hex()}${h.hex()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        algo, iters_s, salt_hex, hash_hex = stored.split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iters_s))
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
+
+
+def _require_host(db: Session, game_id: int, token: str, password: str = "") -> models.Game:
     if not token:
         raise HTTPException(status_code=401, detail="Missing host token")
     game = db.query(models.Game).filter(models.Game.id == game_id).first()
@@ -100,6 +132,11 @@ def _require_host(db: Session, game_id: int, token: str) -> models.Game:
         raise HTTPException(status_code=404, detail="Game not found")
     if game.host_token != token:
         raise HTTPException(status_code=403, detail="Bad host token")
+    if game.password_hash:
+        if not password:
+            raise HTTPException(status_code=401, detail="Password required")
+        if not _verify_password(password, game.password_hash):
+            raise HTTPException(status_code=403, detail="Wrong password")
     return game
 
 
@@ -322,11 +359,36 @@ def create_game(payload: schemas.GameCreate, db: Session = Depends(get_db)):
         final_lat=payload.final_lat,
         final_lng=payload.final_lng,
         final_label=payload.final_label,
+        password_hash=(_hash_password(payload.password) if payload.password else None),
     )
     db.add(game)
     db.commit()
     db.refresh(game)
-    return game
+    return schemas.GameHostOut.from_orm_game(game)
+
+
+@app.post("/api/games/{game_id}/password")
+def set_password(
+    game_id: int,
+    payload: schemas.PasswordSetIn,
+    x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Set, change, or clear the host password.
+
+    Empty / null `password` clears it. To change an existing password the
+    caller must already be authenticated (current password in
+    X-Host-Password header) — that's enforced by _require_host.
+    """
+    game = _require_host(db, game_id, x_host_token, x_host_password)
+    new_pw = (payload.password or "").strip()
+    if new_pw:
+        game.password_hash = _hash_password(new_pw)
+    else:
+        game.password_hash = None
+    db.commit()
+    return {"has_password": bool(game.password_hash)}
 
 
 @app.post("/api/host/recover", response_model=schemas.HostRecoverOut)
@@ -340,16 +402,20 @@ def host_recover(payload: schemas.HostRecoverIn, db: Session = Depends(get_db)):
     game = db.query(models.Game).filter(models.Game.host_token == token).first()
     if not game:
         raise HTTPException(status_code=404, detail="Unknown host token")
-    return schemas.HostRecoverOut(game_id=game.id, name=game.name, join_code=game.join_code)
+    return schemas.HostRecoverOut(
+        game_id=game.id, name=game.name, join_code=game.join_code,
+        has_password=bool(game.password_hash),
+    )
 
 
 @app.get("/api/games/{game_id}/host", response_model=schemas.HostDashboardOut)
 def host_dashboard(
     game_id: int,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    game = _require_host(db, game_id, x_host_token)
+    game = _require_host(db, game_id, x_host_token, x_host_password)
     total = len(game.locations)
     teams = [_team_summary(db, t, total) for t in game.teams]
     matrix: dict = {}
@@ -358,7 +424,7 @@ def host_dashboard(
         for p in t.progress:
             matrix[t.id][p.location_id] = bool(p.solved)
     return schemas.HostDashboardOut(
-        game=schemas.GameHostOut.model_validate(game),
+        game=schemas.GameHostOut.from_orm_game(game),
         teams=teams,
         progress_matrix=matrix,
     )
@@ -369,22 +435,24 @@ def update_game(
     game_id: int,
     payload: schemas.GameCreate,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    game = _require_host(db, game_id, x_host_token)
+    game = _require_host(db, game_id, x_host_token, x_host_password)
     game.name = payload.name
     game.final_lat = payload.final_lat
     game.final_lng = payload.final_lng
     game.final_label = payload.final_label
     db.commit()
     db.refresh(game)
-    return game
+    return schemas.GameHostOut.from_orm_game(game)
 
 
 @app.post("/api/games/{game_id}/start", response_model=schemas.GameHostOut)
 def start_game(
     game_id: int,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
     """Start (or resume) the game. On the first call this also:
@@ -394,27 +462,28 @@ def start_game(
     Idempotent for already-locked teams; re-clicking after late joins gives
     those teams their sequences and actions without disturbing existing ones.
     """
-    game = _require_host(db, game_id, x_host_token)
+    game = _require_host(db, game_id, x_host_token, x_host_password)
     game.started = True
     _lock_and_randomize(db, game)
     for team in game.teams:
         _assign_actions_to_team(db, team)
     db.commit()
     db.refresh(game)
-    return game
+    return schemas.GameHostOut.from_orm_game(game)
 
 
 @app.post("/api/games/{game_id}/stop", response_model=schemas.GameHostOut)
 def stop_game(
     game_id: int,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    game = _require_host(db, game_id, x_host_token)
+    game = _require_host(db, game_id, x_host_token, x_host_password)
     game.started = False
     db.commit()
     db.refresh(game)
-    return game
+    return schemas.GameHostOut.from_orm_game(game)
 
 
 # ---------- host: locations ----------
@@ -424,9 +493,10 @@ def add_location(
     game_id: int,
     payload: schemas.LocationIn,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    _require_host(db, game_id, x_host_token)
+    _require_host(db, game_id, x_host_token, x_host_password)
     loc = models.Location(game_id=game_id, **payload.model_dump())
     db.add(loc)
     db.commit()
@@ -440,9 +510,10 @@ def update_location(
     loc_id: int,
     payload: schemas.LocationIn,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    _require_host(db, game_id, x_host_token)
+    _require_host(db, game_id, x_host_token, x_host_password)
     loc = db.query(models.Location).filter(
         models.Location.id == loc_id, models.Location.game_id == game_id
     ).first()
@@ -460,9 +531,10 @@ def delete_location(
     game_id: int,
     loc_id: int,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    _require_host(db, game_id, x_host_token)
+    _require_host(db, game_id, x_host_token, x_host_password)
     loc = db.query(models.Location).filter(
         models.Location.id == loc_id, models.Location.game_id == game_id
     ).first()
@@ -480,9 +552,10 @@ def add_action(
     game_id: int,
     payload: schemas.ActionIn,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    _require_host(db, game_id, x_host_token)
+    _require_host(db, game_id, x_host_token, x_host_password)
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Action text is required")
@@ -501,9 +574,10 @@ def update_action(
     action_id: int,
     payload: schemas.ActionIn,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    _require_host(db, game_id, x_host_token)
+    _require_host(db, game_id, x_host_token, x_host_password)
     a = db.query(models.Action).filter(
         models.Action.id == action_id, models.Action.game_id == game_id
     ).first()
@@ -525,9 +599,10 @@ def delete_action(
     game_id: int,
     action_id: int,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
-    _require_host(db, game_id, x_host_token)
+    _require_host(db, game_id, x_host_token, x_host_password)
     a = db.query(models.Action).filter(
         models.Action.id == action_id, models.Action.game_id == game_id
     ).first()
@@ -542,11 +617,12 @@ def delete_action(
 def reassign_team_actions(
     game_id: int,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
     """Top up every team to ACTIONS_PER_TEAM. Useful if the host added actions
     after teams already joined. Existing assignments are kept (no reshuffle)."""
-    game = _require_host(db, game_id, x_host_token)
+    game = _require_host(db, game_id, x_host_token, x_host_password)
     for team in game.teams:
         _assign_actions_to_team(db, team)
     db.commit()
@@ -700,13 +776,14 @@ def host_toggle_team_action(
     team_id: int,
     team_action_id: int,
     x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
     """Approve / unapprove a team's completion of an action.
 
     Teams send proof out-of-band (e.g. WhatsApp); only the host flips this.
     """
-    _require_host(db, game_id, x_host_token)
+    _require_host(db, game_id, x_host_token, x_host_password)
     ta = db.query(models.TeamAction).filter(
         models.TeamAction.id == team_action_id,
         models.TeamAction.team_id == team_id,

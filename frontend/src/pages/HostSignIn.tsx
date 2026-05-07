@@ -13,6 +13,7 @@ import { hostRecover } from "../api";
 export default function HostSignIn() {
   const nav = useNavigate();
   const [input, setInput] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -35,6 +36,11 @@ export default function HostSignIn() {
       if (!token) throw new Error("Paste your host token or recovery URL.");
       const r = await hostRecover(token);
       localStorage.setItem(`host:${r.game_id}`, token);
+      // Stash the password too if the user supplied one. The dashboard will
+      // re-prompt if it's wrong; we don't validate here to keep this endpoint
+      // public-friendly (no online password-guessing oracle).
+      if (password) localStorage.setItem(`host_pw:${r.game_id}`, password);
+      else localStorage.removeItem(`host_pw:${r.game_id}`);
       nav(`/host/${r.game_id}`);
     } catch (e: any) {
       setErr(e.message || "Couldn't recover that game.");
@@ -60,6 +66,10 @@ export default function HostSignIn() {
               autoFocus
               style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 12 }}
             />
+          </div>
+          <div>
+            <label>Password (only if you set one when creating the game)</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} />
           </div>
           {err && <div className="banner banner--bad">{err}</div>}
           <div className="row">

@@ -48,6 +48,7 @@ export type GameHost = {
   final_lng?: number | null;
   final_label?: string | null;
   started: boolean;
+  has_password: boolean;
   locations: LocationHost[];
   actions: Action[];
 };
@@ -102,12 +103,16 @@ export type TeamSession = {
   game_name: string;
 };
 
+/** Sentinel error message thrown when the server says a host password is needed. */
+export const PASSWORD_REQUIRED_MARKER = "__PASSWORD_REQUIRED__";
+
 async function req<T>(
   path: string,
-  opts: { method?: string; body?: unknown; hostToken?: string; teamToken?: string } = {}
+  opts: { method?: string; body?: unknown; hostToken?: string; hostPassword?: string; teamToken?: string } = {}
 ): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (opts.hostToken) headers["X-Host-Token"] = opts.hostToken;
+  if (opts.hostPassword) headers["X-Host-Password"] = opts.hostPassword;
   if (opts.teamToken) headers["X-Team-Token"] = opts.teamToken;
   const res = await fetch(path, {
     method: opts.method ?? (opts.body ? "POST" : "GET"),
@@ -132,6 +137,11 @@ async function req<T>(
     } else if (typeof detail !== "string") {
       detail = JSON.stringify(detail);
     }
+    // Special-case the password-gate so the UI can show a prompt instead of
+    // a red error banner.
+    if (res.status === 401 && /password required/i.test(String(detail))) {
+      throw new Error(PASSWORD_REQUIRED_MARKER);
+    }
     throw new Error(detail);
   }
   if (res.status === 204) return undefined as T;
@@ -139,63 +149,70 @@ async function req<T>(
 }
 
 // ---- host ----
-export const createGame = (name: string) =>
-  req<GameHost>("/api/games", { body: { name } });
+export const createGame = (name: string, password?: string | null) =>
+  req<GameHost>("/api/games", { body: { name, password: password || null } });
 
 export const hostRecover = (host_token: string) =>
-  req<{ game_id: number; name: string; join_code: string }>(
+  req<{ game_id: number; name: string; join_code: string; has_password: boolean }>(
     "/api/host/recover",
     { body: { host_token } }
   );
 
+export const setHostPassword = (gameId: number, hostToken: string, hostPassword: string, newPassword: string | null) =>
+  req<{ has_password: boolean }>(`/api/games/${gameId}/password`, {
+    body: { password: newPassword },
+    hostToken, hostPassword,
+  });
+
 export const updateGame = (
   gameId: number,
   hostToken: string,
+  hostPassword: string,
   payload: { name: string; final_lat?: number | null; final_lng?: number | null; final_label?: string | null }
-) => req<GameHost>(`/api/games/${gameId}`, { method: "PATCH", body: payload, hostToken });
+) => req<GameHost>(`/api/games/${gameId}`, { method: "PATCH", body: payload, hostToken, hostPassword });
 
-export const startGame = (gameId: number, hostToken: string) =>
-  req<GameHost>(`/api/games/${gameId}/start`, { method: "POST", hostToken });
+export const startGame = (gameId: number, hostToken: string, hostPassword: string) =>
+  req<GameHost>(`/api/games/${gameId}/start`, { method: "POST", hostToken, hostPassword });
 
-export const stopGame = (gameId: number, hostToken: string) =>
-  req<GameHost>(`/api/games/${gameId}/stop`, { method: "POST", hostToken });
+export const stopGame = (gameId: number, hostToken: string, hostPassword: string) =>
+  req<GameHost>(`/api/games/${gameId}/stop`, { method: "POST", hostToken, hostPassword });
 
-export const getHostDashboard = (gameId: number, hostToken: string) =>
-  req<HostDashboard>(`/api/games/${gameId}/host`, { hostToken });
+export const getHostDashboard = (gameId: number, hostToken: string, hostPassword: string) =>
+  req<HostDashboard>(`/api/games/${gameId}/host`, { hostToken, hostPassword });
 
-export const addLocation = (gameId: number, hostToken: string, body: Omit<LocationHost, "id">) =>
-  req<LocationHost>(`/api/games/${gameId}/locations`, { body, hostToken });
+export const addLocation = (gameId: number, hostToken: string, hostPassword: string, body: Omit<LocationHost, "id">) =>
+  req<LocationHost>(`/api/games/${gameId}/locations`, { body, hostToken, hostPassword });
 
-export const updateLocation = (gameId: number, locId: number, hostToken: string, body: Omit<LocationHost, "id">) =>
-  req<LocationHost>(`/api/games/${gameId}/locations/${locId}`, { method: "PUT", body, hostToken });
+export const updateLocation = (gameId: number, locId: number, hostToken: string, hostPassword: string, body: Omit<LocationHost, "id">) =>
+  req<LocationHost>(`/api/games/${gameId}/locations/${locId}`, { method: "PUT", body, hostToken, hostPassword });
 
-export const deleteLocation = (gameId: number, locId: number, hostToken: string) =>
-  req<void>(`/api/games/${gameId}/locations/${locId}`, { method: "DELETE", hostToken });
+export const deleteLocation = (gameId: number, locId: number, hostToken: string, hostPassword: string) =>
+  req<void>(`/api/games/${gameId}/locations/${locId}`, { method: "DELETE", hostToken, hostPassword });
 
 export const addAction = (
-  gameId: number, hostToken: string,
+  gameId: number, hostToken: string, hostPassword: string,
   text: string, hint?: string | null, location_id?: number | null
 ) =>
   req<Action>(`/api/games/${gameId}/actions`, {
     body: { text, hint: hint || null, location_id: location_id ?? null },
-    hostToken,
+    hostToken, hostPassword,
   });
 
 export const updateAction = (
-  gameId: number, actionId: number, hostToken: string,
+  gameId: number, actionId: number, hostToken: string, hostPassword: string,
   text: string, hint?: string | null, location_id?: number | null
 ) =>
   req<Action>(`/api/games/${gameId}/actions/${actionId}`, {
     method: "PUT",
     body: { text, hint: hint || null, location_id: location_id ?? null },
-    hostToken,
+    hostToken, hostPassword,
   });
 
-export const deleteAction = (gameId: number, actionId: number, hostToken: string) =>
-  req<void>(`/api/games/${gameId}/actions/${actionId}`, { method: "DELETE", hostToken });
+export const deleteAction = (gameId: number, actionId: number, hostToken: string, hostPassword: string) =>
+  req<void>(`/api/games/${gameId}/actions/${actionId}`, { method: "DELETE", hostToken, hostPassword });
 
-export const reassignActions = (gameId: number, hostToken: string) =>
-  req<{ ok: boolean; teams: number }>(`/api/games/${gameId}/actions/assign`, { method: "POST", hostToken });
+export const reassignActions = (gameId: number, hostToken: string, hostPassword: string) =>
+  req<{ ok: boolean; teams: number }>(`/api/games/${gameId}/actions/assign`, { method: "POST", hostToken, hostPassword });
 
 // ---- team ----
 export const joinGame = (join_code: string, name: string, color: string) =>
@@ -220,9 +237,9 @@ export const submitAnswer = (teamId: number, teamToken: string, locationId: numb
   );
 
 export const hostToggleTeamAction = (
-  gameId: number, teamId: number, teamActionId: number, hostToken: string
+  gameId: number, teamId: number, teamActionId: number, hostToken: string, hostPassword: string
 ) =>
   req<{ id: number; completed: boolean; completed_at?: string | null }>(
     `/api/games/${gameId}/teams/${teamId}/actions/${teamActionId}/toggle`,
-    { method: "POST", hostToken }
+    { method: "POST", hostToken, hostPassword }
   );

@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  Action, HostDashboard, LocationHost, addAction, addLocation, deleteAction,
-  deleteLocation, getHostDashboard, hostToggleTeamAction, reassignActions,
-  startGame, stopGame, updateAction, updateGame, updateLocation,
+  Action, HostDashboard, LocationHost, PASSWORD_REQUIRED_MARKER,
+  addAction, addLocation, deleteAction, deleteLocation, getHostDashboard,
+  hostToggleTeamAction, reassignActions, setHostPassword, startGame, stopGame,
+  updateAction, updateGame, updateLocation,
 } from "../api";
 import MapView, { MapMarker } from "../components/MapView";
 
@@ -36,12 +37,22 @@ export default function HostGame() {
     const fromHash = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("t");
     if (fromHash) {
       localStorage.setItem(`host:${id}`, fromHash);
-      // Clear the hash so the token isn't visible in the URL bar afterwards.
       history.replaceState(null, "", window.location.pathname + window.location.search);
       return fromHash;
     }
     return "";
   }, [id]);
+  const [hostPassword, setHostPasswordState] = useState<string>(() => localStorage.getItem(`host_pw:${id}`) || "");
+  const [needPwPrompt, setNeedPwPrompt] = useState(false);
+
+  function rememberPassword(pw: string) {
+    localStorage.setItem(`host_pw:${id}`, pw);
+    setHostPasswordState(pw);
+  }
+  function forgetPassword() {
+    localStorage.removeItem(`host_pw:${id}`);
+    setHostPasswordState("");
+  }
 
   const [tab, setTab] = useState<Tab>("setup");
   const [data, setData] = useState<HostDashboard | null>(null);
@@ -55,7 +66,7 @@ export default function HostGame() {
   async function reload() {
     if (!hostToken) { nav("/host"); return; }
     try {
-      const d = await getHostDashboard(id, hostToken);
+      const d = await getHostDashboard(id, hostToken, hostPassword);
       setData(d);
       setMeta({
         name: d.game.name,
@@ -63,7 +74,13 @@ export default function HostGame() {
         final_lng: d.game.final_lng?.toString() ?? "",
         final_label: d.game.final_label ?? "",
       });
+      setErr("");
     } catch (e: any) {
+      if (e?.message === PASSWORD_REQUIRED_MARKER) {
+        forgetPassword();
+        setNeedPwPrompt(true);
+        return;
+      }
       setErr(e.message || "Failed to load game");
     }
   }
@@ -78,13 +95,19 @@ export default function HostGame() {
   }, [tab]);
 
   if (!hostToken) return null;
+  if (needPwPrompt) {
+    return <PasswordPrompt
+      onSubmit={pw => { rememberPassword(pw); setNeedPwPrompt(false); reload(); }}
+      onCancel={() => nav("/host")}
+    />;
+  }
   if (!data) return <div className="app"><div className="card">{err || "Loading…"}</div></div>;
 
   const game = data.game;
 
   async function saveMeta() {
     try {
-      await updateGame(id, hostToken, {
+      await updateGame(id, hostToken, hostPassword, {
         name: meta.name.trim() || game.name,
         final_lat: meta.final_lat ? Number(meta.final_lat) : null,
         final_lng: meta.final_lng ? Number(meta.final_lng) : null,
@@ -95,11 +118,11 @@ export default function HostGame() {
   }
 
   async function startNow() {
-    try { await startGame(id, hostToken); reload(); } catch (e: any) { setErr(e.message); }
+    try { await startGame(id, hostToken, hostPassword); reload(); } catch (e: any) { setErr(e.message); }
   }
   async function stopNow() {
     if (!confirm("Stop the game? Teams will see it as no longer live; you can resume any time.")) return;
-    try { await stopGame(id, hostToken); reload(); } catch (e: any) { setErr(e.message); }
+    try { await stopGame(id, hostToken, hostPassword); reload(); } catch (e: any) { setErr(e.message); }
   }
 
   function openNewLoc() {
@@ -116,9 +139,9 @@ export default function HostGame() {
   async function saveLoc(payload: Omit<LocationHost, "id">) {
     try {
       if (editingId == null) {
-        await addLocation(id, hostToken, payload);
+        await addLocation(id, hostToken, hostPassword, payload);
       } else {
-        await updateLocation(id, editingId, hostToken, payload);
+        await updateLocation(id, editingId, hostToken, hostPassword, payload);
       }
       setDraft(null);
       setEditingId(null);
@@ -128,7 +151,7 @@ export default function HostGame() {
 
   async function removeLoc(locId: number) {
     if (!confirm("Delete this location?")) return;
-    try { await deleteLocation(id, locId, hostToken); reload(); } catch (e: any) { setErr(e.message); }
+    try { await deleteLocation(id, locId, hostToken, hostPassword); reload(); } catch (e: any) { setErr(e.message); }
   }
 
   const locMarkers: MapMarker[] = game.locations.map(l => ({
@@ -170,6 +193,7 @@ export default function HostGame() {
           <SetupTab
             gameId={id}
             hostToken={hostToken}
+            hostPassword={hostPassword}
             game={game}
             meta={meta}
             setMeta={setMeta}
@@ -188,6 +212,7 @@ export default function HostGame() {
             data={data}
             gameId={id}
             hostToken={hostToken}
+            hostPassword={hostPassword}
             reload={reload}
             setErr={setErr}
             onAddLocation={openNewLoc}
@@ -212,6 +237,7 @@ export default function HostGame() {
 function SetupTab(props: {
   gameId: number;
   hostToken: string;
+  hostPassword: string;
   game: HostDashboard["game"];
   meta: { name: string; final_lat: string; final_lng: string; final_label: string };
   setMeta: (m: any) => void;
@@ -225,7 +251,7 @@ function SetupTab(props: {
   teamCount: number;
   teamsWithActions: number;
 }) {
-  const { gameId, hostToken, game, meta, setMeta, saveMeta, locMarkers, openNewLoc, openEdit, removeLoc, reload, setErr, teamCount, teamsWithActions } = props;
+  const { gameId, hostToken, hostPassword, game, meta, setMeta, saveMeta, locMarkers, openNewLoc, openEdit, removeLoc, reload, setErr, teamCount, teamsWithActions } = props;
   const finalLatNum = meta.final_lat ? Number(meta.final_lat) : NaN;
   const finalLngNum = meta.final_lng ? Number(meta.final_lng) : NaN;
   const finalSet = Number.isFinite(finalLatNum) && Number.isFinite(finalLngNum);
@@ -295,6 +321,16 @@ function SetupTab(props: {
         {game.locations.length === 0 && <div className="muted">No locations yet — add the first one to get started.</div>}
       </ul>
 
+      <h2 style={{ marginTop: 16 }}>Host password</h2>
+      <PasswordManager
+        gameId={gameId}
+        hostToken={hostToken}
+        hostPassword={hostPassword}
+        hasPassword={game.has_password}
+        onChange={() => reload()}
+        setErr={setErr}
+      />
+
       <h2 style={{ marginTop: 16 }}>Actions pool</h2>
       <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
         Build the pool first, then click <em>Reveal actions</em> when you're ready. Each team gets 3 random actions from the pool. Players don't see anything until you reveal — and each approved action unlocks one location's hint, in order.
@@ -302,6 +338,7 @@ function SetupTab(props: {
       <ActionsEditor
         gameId={gameId}
         hostToken={hostToken}
+        hostPassword={hostPassword}
         actions={game.actions}
         locations={game.locations}
         teamCount={teamCount}
@@ -316,6 +353,7 @@ function SetupTab(props: {
 function ActionsEditor(props: {
   gameId: number;
   hostToken: string;
+  hostPassword: string;
   actions: Action[];
   locations: LocationHost[];
   teamCount: number;
@@ -323,7 +361,7 @@ function ActionsEditor(props: {
   reload: () => void;
   setErr: (s: string) => void;
 }) {
-  const { gameId, hostToken, actions, locations, teamCount, teamsWithActions, reload, setErr } = props;
+  const { gameId, hostToken, hostPassword, actions, locations, teamCount, teamsWithActions, reload, setErr } = props;
   const [draftText, setDraftText] = useState("");
   const [draftHint, setDraftHint] = useState("");
   const [draftLocId, setDraftLocId] = useState<string>("");
@@ -343,7 +381,7 @@ function ActionsEditor(props: {
     const t = draftText.trim();
     if (!t) return;
     try {
-      await addAction(gameId, hostToken, t, draftHint.trim() || null, draftLocId ? Number(draftLocId) : null);
+      await addAction(gameId, hostToken, hostPassword, t, draftHint.trim() || null, draftLocId ? Number(draftLocId) : null);
       setDraftText(""); setDraftHint(""); setDraftLocId("");
       reload();
     } catch (e: any) { setErr(e.message); }
@@ -352,21 +390,21 @@ function ActionsEditor(props: {
     const t = editingText.trim();
     if (!t) return;
     try {
-      await updateAction(gameId, id, hostToken, t, editingHint.trim() || null, editingLocId ? Number(editingLocId) : null);
+      await updateAction(gameId, id, hostToken, hostPassword, t, editingHint.trim() || null, editingLocId ? Number(editingLocId) : null);
       setEditingId(null);
       reload();
     } catch (e: any) { setErr(e.message); }
   }
   async function remove(id: number) {
     if (!confirm("Delete this action?")) return;
-    try { await deleteAction(gameId, id, hostToken); reload(); }
+    try { await deleteAction(gameId, id, hostToken, hostPassword); reload(); }
     catch (e: any) { setErr(e.message); }
   }
   async function reveal() {
     if (initialReveal && actions.length < 3) {
       if (!confirm(`Only ${actions.length} action(s) in the pool — teams will get fewer than 3. Continue?`)) return;
     }
-    try { const r = await reassignActions(gameId, hostToken); alert(`Assigned to ${r.teams} team(s).`); reload(); }
+    try { const r = await reassignActions(gameId, hostToken, hostPassword); alert(`Assigned to ${r.teams} team(s).`); reload(); }
     catch (e: any) { setErr(e.message); }
   }
 
@@ -467,19 +505,20 @@ function LiveTab(props: {
   data: HostDashboard;
   gameId: number;
   hostToken: string;
+  hostPassword: string;
   reload: () => void;
   setErr: (s: string) => void;
   onAddLocation: () => void;
   goToSetup: () => void;
 }) {
-  const { data, gameId, hostToken, reload, setErr, onAddLocation, goToSetup } = props;
+  const { data, gameId, hostToken, hostPassword, reload, setErr, onAddLocation, goToSetup } = props;
   const { game, teams, progress_matrix } = data;
   const [openTeamId, setOpenTeamId] = useState<number | null>(null);
   const [showLocDetail, setShowLocDetail] = useState(false);
 
   async function approve(teamId: number, taId: number) {
     try {
-      await hostToggleTeamAction(gameId, teamId, taId, hostToken);
+      await hostToggleTeamAction(gameId, teamId, taId, hostToken, hostPassword);
       reload();
     } catch (e: any) { setErr(e.message); }
   }
@@ -490,7 +529,7 @@ function LiveTab(props: {
     if (teamsWithActions === 0 && data.game.actions.length < 3) {
       if (!confirm(`Only ${data.game.actions.length} action(s) in the pool — teams will get fewer than 3. Continue?`)) return;
     }
-    try { const r = await reassignActions(gameId, hostToken); alert(`Assigned to ${r.teams} team(s).`); reload(); }
+    try { const r = await reassignActions(gameId, hostToken, hostPassword); alert(`Assigned to ${r.teams} team(s).`); reload(); }
     catch (e: any) { setErr(e.message); }
   }
   const teamMarkers: MapMarker[] = teams
@@ -804,6 +843,105 @@ function LocationModal(props: {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+
+function PasswordPrompt({ onSubmit, onCancel }: { onSubmit: (pw: string) => void; onCancel: () => void }) {
+  const [pw, setPw] = useState("");
+  return (
+    <div className="app">
+      <div className="card">
+        <h1>Password required</h1>
+        <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+          This game is password-protected. Enter the host password to continue.
+        </div>
+        <form className="stack" onSubmit={e => { e.preventDefault(); if (pw) onSubmit(pw); }}>
+          <div>
+            <label>Host password</label>
+            <input type="password" value={pw} onChange={e => setPw(e.target.value)} autoFocus />
+          </div>
+          <div className="row">
+            <button type="button" className="btn btn--ghost" onClick={onCancel}>Cancel</button>
+            <div className="spacer" />
+            <button className="btn" disabled={!pw}>Unlock</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+
+function PasswordManager(props: {
+  gameId: number;
+  hostToken: string;
+  hostPassword: string;
+  hasPassword: boolean;
+  onChange: () => void;
+  setErr: (s: string) => void;
+}) {
+  const { gameId, hostToken, hostPassword, hasPassword, onChange, setErr } = props;
+  const [editing, setEditing] = useState(false);
+  const [pw, setPw] = useState("");
+
+  async function save() {
+    try {
+      await setHostPassword(gameId, hostToken, hostPassword, pw || null);
+      // Save the new password locally so subsequent calls work without a prompt.
+      if (pw) localStorage.setItem(`host_pw:${gameId}`, pw);
+      else localStorage.removeItem(`host_pw:${gameId}`);
+      setPw("");
+      setEditing(false);
+      onChange();
+    } catch (e: any) { setErr(e.message); }
+  }
+  async function clearPw() {
+    if (!confirm("Remove the host password? Anyone with the recovery link will be able to host.")) return;
+    try {
+      await setHostPassword(gameId, hostToken, hostPassword, null);
+      localStorage.removeItem(`host_pw:${gameId}`);
+      onChange();
+    } catch (e: any) { setErr(e.message); }
+  }
+
+  if (!editing) {
+    return (
+      <div className="row">
+        <div className="muted" style={{ fontSize: 12 }}>
+          {hasPassword
+            ? "🔒 Password protected. Anyone with the recovery link still needs the password."
+            : "No password set. Anyone with the recovery link can host."}
+        </div>
+        <div className="spacer" />
+        <button className="btn btn--ghost btn--small" onClick={() => setEditing(true)}>
+          {hasPassword ? "Change password" : "Set password"}
+        </button>
+        {hasPassword && (
+          <button className="btn btn--ghost btn--small" onClick={clearPw}>Remove</button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="stack stack--tight">
+      <input
+        type="password"
+        value={pw}
+        onChange={e => setPw(e.target.value)}
+        placeholder={hasPassword ? "New password" : "Pick a password"}
+        autoFocus
+      />
+      <div className="row">
+        <button className="btn btn--ghost btn--small" onClick={() => { setEditing(false); setPw(""); }}>Cancel</button>
+        <div className="spacer" />
+        <button className="btn btn--small" onClick={save} disabled={!pw}>Save</button>
+      </div>
+      <div className="muted" style={{ fontSize: 11 }}>
+        Tip: pick something easy to remember but not guessable. Anyone with the recovery link AND this password can host.
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import { GameHost, createGame } from "../api";
 export default function HostNew() {
   const nav = useNavigate();
   const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [created, setCreated] = useState<GameHost | null>(null);
@@ -15,9 +16,10 @@ export default function HostNew() {
     if (!name.trim()) return;
     setBusy(true); setErr("");
     try {
-      const g = await createGame(name.trim());
+      const g = await createGame(name.trim(), password || null);
       // Persist host token for this browser.
       localStorage.setItem(`host:${g.id}`, g.host_token);
+      if (password) localStorage.setItem(`host_pw:${g.id}`, password);
       setCreated(g);
     } catch (e: any) {
       setErr(e.message || "Failed to create game");
@@ -45,7 +47,10 @@ export default function HostNew() {
 
           <h2 style={{ marginTop: 8 }}>Save this recovery link</h2>
           <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
-            Bookmark this link or paste it into your notes. It's the only way back into this game from another device, and anyone with it has full host control.
+            Bookmark this link or paste it into your notes. It's the only way back into this game from another device.
+            {created.has_password
+              ? <> You'll also need <strong>your password</strong> — it's <em>not</em> in the link.</>
+              : <> Anyone with this link can host; consider setting a password in Setup.</>}
           </div>
           <div className="stack stack--tight" style={{ marginBottom: 12 }}>
             <input
@@ -94,6 +99,18 @@ export default function HostNew() {
           <div>
             <label>Game name</label>
             <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Stadsspel Bruges 2026" autoFocus />
+          </div>
+          <div>
+            <label>Host password (optional, recommended)</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="Leave blank for no password"
+            />
+            <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+              When set, the recovery link alone is not enough — you'll also need this password to host. You can change it later.
+            </div>
           </div>
           {err && <div className="banner banner--bad">{err}</div>}
           <div className="row">
