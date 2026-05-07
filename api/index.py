@@ -11,7 +11,7 @@ import secrets
 import string
 import sys
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 ACTIONS_PER_TEAM = 3
 
@@ -42,9 +42,16 @@ def _migrate_additive() -> None:
     insp = inspect(engine)
     if "actions" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("actions")}
-        if "hint" not in cols:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if "hint" not in cols:
                 conn.execute(text("ALTER TABLE actions ADD COLUMN hint TEXT"))
+            if "location_id" not in cols:
+                conn.execute(text("ALTER TABLE actions ADD COLUMN location_id INTEGER"))
+    if "progress" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("progress")}
+        if "position" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE progress ADD COLUMN position INTEGER"))
 
 
 _migrate_additive()
@@ -105,9 +112,61 @@ def _require_team(db: Session, team_id: int, token: str) -> models.Team:
     return team
 
 
+def _visible_progress(team: models.Team) -> tuple[List[models.Progress], bool]:
+    """Return (rows_in_view, is_locked).
+
+    is_locked=False means the team's progress hasn't been positioned yet
+    (host hasn't clicked Start to lock+randomize, or this is legacy data) —
+    the caller should fall back to showing all locations.
+
+    is_locked=True means we filter: only solved positions plus the next-up
+    position are visible. Rows are sorted by position.
+    """
+    rows = list(team.progress)
+    has_positions = any(p.position is not None for p in rows)
+    if not has_positions:
+        return rows, False
+    pos_rows = sorted([p for p in rows if p.position is not None], key=lambda p: p.position)  # type: ignore[arg-type,return-value]
+    # Note: don't use `or -1` here — position 0 is falsy but valid.
+    solved_positions = [p.position for p in pos_rows if p.solved and p.position is not None]
+    max_solved = max(solved_positions) if solved_positions else -1
+    threshold = max_solved + 1  # next-to-solve
+    visible = [p for p in pos_rows if p.position is not None and p.position <= threshold]
+    return visible, True
+
+
+def _resolve_action_location(db: Session, game_id: int, location_id: Optional[int]) -> Optional[int]:
+    if not location_id:
+        return None
+    loc = db.query(models.Location).filter(
+        models.Location.id == location_id, models.Location.game_id == game_id
+    ).first()
+    if not loc:
+        raise HTTPException(status_code=400, detail="Action location must belong to this game")
+    return loc.id
+
+
+def _location_visible_to(team: models.Team, location_id: int) -> bool:
+    """Is this specific location currently visible in the team's sequence?
+    Returns True for legacy/unlocked teams (no positions set).
+    """
+    visible, locked = _visible_progress(team)
+    if not locked:
+        return True
+    return any(p.location_id == location_id for p in visible)
+
+
 def _team_action_views(team: models.Team) -> List[schemas.TeamActionOut]:
     out: List[schemas.TeamActionOut] = []
     for ta in team.actions:
+        loc_id = ta.action.location_id if (ta.action and ta.action.location_id) else None
+        loc_name: Optional[str] = None  # type: ignore[name-defined]
+        loc_id_out = None
+        if loc_id is not None and _location_visible_to(team, loc_id):
+            # Reveal the tied location only once it's in their visible window.
+            loc_id_out = loc_id
+            loc = next((l for l in team.game.locations if l.id == loc_id), None)
+            loc_name = loc.name if loc else None
         out.append(schemas.TeamActionOut(
             id=ta.id,
             action_id=ta.action_id,
@@ -115,8 +174,83 @@ def _team_action_views(team: models.Team) -> List[schemas.TeamActionOut]:
             hint=(ta.action.hint if ta.action else None),
             completed=bool(ta.completed),
             completed_at=ta.completed_at,
+            location_id=loc_id_out,
+            location_name=loc_name,
         ))
     return out
+
+
+def _lock_and_randomize(db: Session, game: models.Game) -> int:
+    """For each team without a positional sequence yet, generate a random
+    location ordering. Teams that already have positions are kept as-is, but
+    any newly-added locations are appended to their sequence.
+
+    Tries to give each unlocked team a *distinct* first location to spread
+    teams out at the start. Returns the number of teams that were freshly
+    randomized.
+    """
+    locations = list(game.locations)
+    n = len(locations)
+    teams = list(game.teams)
+    if n == 0 or not teams:
+        return 0
+
+    # Track first locations already in use by locked teams so unlocked teams
+    # avoid duplicating them when possible.
+    used_first_loc_ids: set[int] = set()
+    locked_teams: list[models.Team] = []
+    unlocked_teams: list[models.Team] = []
+    for t in teams:
+        positions_set = [p for p in t.progress if p.position is not None]
+        if positions_set:
+            locked_teams.append(t)
+            first = next((p for p in positions_set if p.position == 0), None)
+            if first:
+                used_first_loc_ids.add(first.location_id)
+        else:
+            unlocked_teams.append(t)
+
+    # Build a queue of "preferred firsts" for unlocked teams: shuffle all
+    # locations, prefer those not already used. If we run out, recycle.
+    pool = [loc for loc in locations if loc.id not in used_first_loc_ids]
+    random.shuffle(pool)
+    fallback = list(locations)
+    random.shuffle(fallback)
+    first_queue = pool + [loc for loc in fallback if loc not in pool]
+
+    randomized = 0
+    for i, team in enumerate(unlocked_teams):
+        first = first_queue[i % len(first_queue)] if first_queue else random.choice(locations)
+        rest = [loc for loc in locations if loc.id != first.id]
+        random.shuffle(rest)
+        order = [first] + rest
+
+        existing = {p.location_id: p for p in team.progress}
+        for pos, loc in enumerate(order):
+            if loc.id in existing:
+                existing[loc.id].position = pos
+            else:
+                db.add(models.Progress(
+                    team_id=team.id, location_id=loc.id,
+                    position=pos, solved=False, attempts=0,
+                ))
+        randomized += 1
+
+    # Late-added locations: append to each locked team's sequence.
+    for team in locked_teams:
+        existing_ids = {p.location_id for p in team.progress if p.position is not None}
+        new_locs = [loc for loc in locations if loc.id not in existing_ids]
+        if not new_locs:
+            continue
+        max_pos = max(p.position for p in team.progress if p.position is not None)
+        random.shuffle(new_locs)
+        for j, loc in enumerate(new_locs):
+            db.add(models.Progress(
+                team_id=team.id, location_id=loc.id,
+                position=max_pos + 1 + j, solved=False, attempts=0,
+            ))
+
+    return randomized
 
 
 def _team_summary(db: Session, team: models.Team, total_locations: int) -> schemas.TeamHostOut:
@@ -239,8 +373,18 @@ def start_game(
     x_host_token: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
+    """Start (or resume) the game. On the first call this also:
+    - locks teams in: each team gets a random location sequence with a
+      preference for distinct starting locations (anti-flocking);
+    - assigns 3 random actions per team from the action pool.
+    Idempotent for already-locked teams; re-clicking after late joins gives
+    those teams their sequences and actions without disturbing existing ones.
+    """
     game = _require_host(db, game_id, x_host_token)
     game.started = True
+    _lock_and_randomize(db, game)
+    for team in game.teams:
+        _assign_actions_to_team(db, team)
     db.commit()
     db.refresh(game)
     return game
@@ -329,7 +473,8 @@ def add_action(
     if not text:
         raise HTTPException(status_code=400, detail="Action text is required")
     hint = (payload.hint or "").strip() or None
-    action = models.Action(game_id=game_id, text=text, hint=hint)
+    location_id = _resolve_action_location(db, game_id, payload.location_id)
+    action = models.Action(game_id=game_id, text=text, hint=hint, location_id=location_id)
     db.add(action)
     db.commit()
     db.refresh(action)
@@ -355,6 +500,7 @@ def update_action(
         raise HTTPException(status_code=400, detail="Action text is required")
     a.text = text
     a.hint = (payload.hint or "").strip() or None
+    a.location_id = _resolve_action_location(db, game_id, payload.location_id)
     db.commit()
     db.refresh(a)
     return a
@@ -448,29 +594,55 @@ def join_game(payload: schemas.TeamJoinIn, db: Session = Depends(get_db)):
 
 def _state_for(db: Session, team: models.Team) -> schemas.TeamStateOut:
     game = team.game
-    locs = sorted(game.locations, key=lambda l: (l.order_idx, l.id))
-    prog_by_loc = {p.location_id: p for p in team.progress}
-    items: List[schemas.ProgressItem] = []
-    all_solved = bool(locs)
-    for loc in locs:
-        p = prog_by_loc.get(loc.id)
-        solved = bool(p and p.solved)
-        if not solved:
-            all_solved = False
-        items.append(
-            schemas.ProgressItem(
-                location_id=loc.id,
-                solved=solved,
-                attempts=(p.attempts if p else 0),
-                fragment=(loc.fragment if solved else None),
-            )
-        )
+    visible_progress, locked = _visible_progress(team)
+    locs_by_id = {l.id: l for l in game.locations}
 
-    # Each approved action unlocks one hint, in location order_idx order.
+    if locked:
+        # Locked: visible locations only, sorted by team position.
+        locs = [locs_by_id[p.location_id] for p in visible_progress if p.location_id in locs_by_id]
+        # Progress reflects the FULL sequence so counters like "2/5 solved"
+        # are honest even though the UI only shows the visible part.
+        full_rows = sorted(
+            [p for p in team.progress if p.position is not None],
+            key=lambda p: p.position or 0,
+        )
+        items: List[schemas.ProgressItem] = []
+        for p in full_rows:
+            loc = locs_by_id.get(p.location_id)
+            items.append(schemas.ProgressItem(
+                location_id=p.location_id,
+                solved=bool(p.solved),
+                attempts=p.attempts or 0,
+                fragment=(loc.fragment if (loc and p.solved) else None),
+            ))
+        all_solved = bool(full_rows) and all(p.solved for p in full_rows)
+    else:
+        # Legacy / not-yet-locked: show all locations by global order_idx.
+        locs = sorted(game.locations, key=lambda l: (l.order_idx, l.id))
+        prog_by_loc = {p.location_id: p for p in team.progress}
+        items = []
+        for loc in locs:
+            p = prog_by_loc.get(loc.id)
+            items.append(schemas.ProgressItem(
+                location_id=loc.id,
+                solved=bool(p and p.solved),
+                attempts=(p.attempts if p else 0),
+                fragment=(loc.fragment if (p and p.solved) else None),
+            ))
+        all_solved = bool(locs) and all(prog_by_loc.get(l.id) and prog_by_loc[l.id].solved for l in locs)
+
+    prog_by_loc = {p.location_id: p for p in team.progress}
+
+    # Each approved action unlocks one hint, indexed against the team's
+    # visible sequence (by position when locked, by global order_idx otherwise).
     approved_count = sum(1 for ta in team.actions if ta.completed)
     public_locs: List[schemas.LocationPublicOut] = []
     for idx, loc in enumerate(locs):
         unlocked = idx < approved_count
+        position = None
+        if locked:
+            p = prog_by_loc.get(loc.id)
+            position = p.position if (p and p.position is not None) else None
         public_locs.append(schemas.LocationPublicOut(
             id=loc.id,
             name=loc.name,
@@ -478,6 +650,7 @@ def _state_for(db: Session, team: models.Team) -> schemas.TeamStateOut:
             lng=loc.lng,
             radius_m=loc.radius_m,
             order_idx=loc.order_idx,
+            position=position,
             has_hint=bool(loc.hint),
             hint=(loc.hint if (loc.hint and unlocked) else None),
         ))
@@ -563,6 +736,12 @@ def get_question(
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
 
+    if not _location_visible_to(team, loc.id):
+        raise HTTPException(
+            status_code=403,
+            detail="This location isn't on your team's current step.",
+        )
+
     prog = db.query(models.Progress).filter(
         models.Progress.team_id == team.id, models.Progress.location_id == loc.id
     ).first()
@@ -609,6 +788,12 @@ def submit_answer(
     ).first()
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
+
+    if not _location_visible_to(team, loc.id):
+        raise HTTPException(
+            status_code=403,
+            detail="This location isn't on your team's current step.",
+        )
 
     if team.last_lat is None or team.last_lng is None:
         raise HTTPException(status_code=400, detail="No location ping recorded yet")

@@ -39,14 +39,22 @@ start.sh          local dev launcher
 ## Game flow
 
 1. Host opens `/host/new`, names the game → gets a 6-character join code and a host link (saved in `localStorage`).
-2. Host adds locations on the map: name, lat/lng, trigger radius (m), question, answer, fragment text. Optional hint.
-3. Host sets the final coordinates and a label (e.g. "Statue of …").
-4. Players go to `/play`, enter the join code, pick a team name and color → land on `/play/:teamId`.
-5. The player UI streams their geolocation to the server (every ~4 s).
-6. When a team is within a location's radius, an **Open question** button appears. The server re-checks the distance before returning the question.
-7. Correct answer → that location's fragment is unlocked.
-8. All locations solved → final coordinates revealed (with an "Open in Maps" link).
-9. Host's **Live** tab shows all teams on the map and a progress matrix (team × location), polled every 3 s.
+2. Host adds locations (click the map to drop a pin), questions, fragments, hints, and an action pool. Each action can optionally be tied to a location.
+3. Host sets the final destination by clicking the map.
+4. Players go to `/play`, enter the join code and team name (re-entering the same name later restores the team).
+5. Host clicks **Start (lock teams & randomize)**. This:
+   - generates a random per-team location sequence,
+   - prefers giving every team a *different* first location to avoid flocking,
+   - assigns 3 random actions per team.
+6. Each player only sees their **current step** (their solved locations + the next one). Future locations are hidden until they solve the current one.
+7. When a team is within a location's radius, an **Open question** button appears. The server re-checks the distance and visibility before returning the question.
+8. Correct answer → fragment unlocks; the next location in the sequence becomes visible.
+9. Approved actions sequentially unlock the **hint** for each successive visible location.
+10. All locations solved → final coordinates revealed.
+11. Host **Live** tab: map, per-team progress matrix, pending action approvals queue, all locations + hints, polled every 3 s.
+
+### Late joiners
+Teams that join after Start get nothing visible until the host clicks **Re-roll new teams** (the same Start button — it's idempotent: existing teams keep their sequences, only newcomers get assigned).
 
 ## Auth model
 

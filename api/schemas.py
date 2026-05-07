@@ -26,6 +26,9 @@ class LocationPublicOut(BaseModel):
     `hint` is filled only when the team has unlocked it (approved actions ≥
     this location's index in order). `has_hint` tells the UI whether a hint
     exists at all, so it can show a "locked" placeholder when appropriate.
+
+    `position` is the team-specific index in their randomized sequence; the UI
+    sorts by it. Null in the legacy "all-visible" mode (game not locked yet).
     """
     id: int
     name: str
@@ -33,6 +36,7 @@ class LocationPublicOut(BaseModel):
     lng: float
     radius_m: int
     order_idx: int
+    position: Optional[int] = None
     hint: Optional[str] = None
     has_hint: bool = False
     model_config = ConfigDict(from_attributes=True)
@@ -48,12 +52,14 @@ class GameCreate(BaseModel):
 class ActionIn(BaseModel):
     text: str
     hint: Optional[str] = None
+    location_id: Optional[int] = None
 
 
 class ActionOut(BaseModel):
     id: int
     text: str
     hint: Optional[str] = None
+    location_id: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -92,6 +98,10 @@ class TeamActionOut(BaseModel):
     hint: Optional[str] = None
     completed: bool
     completed_at: Optional[datetime] = None
+    # The action's tied location, if any. The name is only revealed once the
+    # location is visible in the team's sequence; otherwise location_id is None.
+    location_id: Optional[int] = None
+    location_name: Optional[str] = None
 
 
 class TeamHostOut(BaseModel):

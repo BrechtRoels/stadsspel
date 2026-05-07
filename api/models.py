@@ -74,6 +74,9 @@ class Progress(Base):
     id = Column(Integer, primary_key=True)
     team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
     location_id = Column(Integer, ForeignKey("locations.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Per-team position in the randomized sequence. Null until the host locks
+    # the game; legacy data also has null and falls back to "all visible".
+    position = Column(Integer, nullable=True)
     solved = Column(Boolean, default=False)
     attempts = Column(Integer, default=0)
     solved_at = Column(DateTime, nullable=True)
@@ -89,8 +92,13 @@ class Action(Base):
     game_id = Column(Integer, ForeignKey("games.id", ondelete="CASCADE"), nullable=False, index=True)
     text = Column(Text, nullable=False)
     hint = Column(Text, nullable=True)
+    # Optional: tie an action to a location. Tells the team where to do the
+    # action. The location is only revealed to a team once that location is
+    # in their visible sequence.
+    location_id = Column(Integer, ForeignKey("locations.id", ondelete="SET NULL"), nullable=True, index=True)
 
     game = relationship("Game", back_populates="actions")
+    location = relationship("Location")
 
 
 class TeamAction(Base):

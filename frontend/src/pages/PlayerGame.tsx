@@ -116,7 +116,7 @@ export default function PlayerGame() {
           <span className="muted">· {state.game_name}</span>
           <div className="spacer" />
           <span className="muted">
-            {state.progress.filter(p => p.solved).length} / {state.locations.length} solved
+            {state.progress.filter(p => p.solved).length} / {state.progress.length || state.locations.length} solved
           </span>
         </div>
         {geoErr && <div className="banner banner--bad" style={{ marginTop: 8 }}>{geoErr}</div>}
@@ -193,6 +193,9 @@ export default function PlayerGame() {
                 <li key={a.id} className="loc-row" style={{ opacity: a.completed ? 0.85 : 1, alignItems: "flex-start" }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ textDecoration: a.completed ? "line-through" : "none" }}>{a.text}</div>
+                    {a.location_name && (
+                      <div className="loc-row__meta">@ {a.location_name}</div>
+                    )}
                     {a.hint && (
                       <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 4 }}>
                         Hint: {a.hint}

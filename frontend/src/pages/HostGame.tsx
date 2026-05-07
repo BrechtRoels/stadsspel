@@ -133,10 +133,11 @@ export default function HostGame() {
           {game.started ? (
             <>
               <span className="banner banner--good" style={{ padding: "4px 10px" }}>Live</span>
+              <button className="btn btn--ghost btn--small" onClick={startNow} title="Re-run for late joiners (existing teams keep their sequence)">Re-roll new teams</button>
               <button className="btn btn--ghost btn--small" onClick={stopNow}>Stop</button>
             </>
           ) : (
-            <button className="btn btn--small" onClick={startNow}>Start game</button>
+            <button className="btn btn--small" onClick={startNow}>Start (lock teams &amp; randomize)</button>
           )}
         </div>
         <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
@@ -289,6 +290,7 @@ function SetupTab(props: {
         gameId={gameId}
         hostToken={hostToken}
         actions={game.actions}
+        locations={game.locations}
         teamCount={teamCount}
         teamsWithActions={teamsWithActions}
         reload={reload}
@@ -302,29 +304,34 @@ function ActionsEditor(props: {
   gameId: number;
   hostToken: string;
   actions: Action[];
+  locations: LocationHost[];
   teamCount: number;
   teamsWithActions: number;
   reload: () => void;
   setErr: (s: string) => void;
 }) {
-  const { gameId, hostToken, actions, teamCount, teamsWithActions, reload, setErr } = props;
+  const { gameId, hostToken, actions, locations, teamCount, teamsWithActions, reload, setErr } = props;
   const [draftText, setDraftText] = useState("");
   const [draftHint, setDraftHint] = useState("");
+  const [draftLocId, setDraftLocId] = useState<string>("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
   const [editingHint, setEditingHint] = useState("");
+  const [editingLocId, setEditingLocId] = useState<string>("");
 
   const initialReveal = teamsWithActions === 0;
   const revealLabel = initialReveal
     ? `Reveal actions to teams (${teamCount})`
     : "Top up team actions";
+  const locName = (id?: number | null) =>
+    id == null ? null : (locations.find(l => l.id === id)?.name ?? null);
 
   async function add() {
     const t = draftText.trim();
     if (!t) return;
     try {
-      await addAction(gameId, hostToken, t, draftHint.trim() || null);
-      setDraftText(""); setDraftHint("");
+      await addAction(gameId, hostToken, t, draftHint.trim() || null, draftLocId ? Number(draftLocId) : null);
+      setDraftText(""); setDraftHint(""); setDraftLocId("");
       reload();
     } catch (e: any) { setErr(e.message); }
   }
@@ -332,7 +339,7 @@ function ActionsEditor(props: {
     const t = editingText.trim();
     if (!t) return;
     try {
-      await updateAction(gameId, id, hostToken, t, editingHint.trim() || null);
+      await updateAction(gameId, id, hostToken, t, editingHint.trim() || null, editingLocId ? Number(editingLocId) : null);
       setEditingId(null);
       reload();
     } catch (e: any) { setErr(e.message); }
@@ -359,13 +366,17 @@ function ActionsEditor(props: {
           placeholder="Action — e.g. Take a selfie with a stranger"
           onKeyDown={e => { if (e.key === "Enter") add(); }}
         />
+        <input
+          value={draftHint}
+          onChange={e => setDraftHint(e.target.value)}
+          placeholder="Hint shown to the team (optional)"
+          onKeyDown={e => { if (e.key === "Enter") add(); }}
+        />
         <div className="row">
-          <input
-            value={draftHint}
-            onChange={e => setDraftHint(e.target.value)}
-            placeholder="Hint shown to the team (optional)"
-            onKeyDown={e => { if (e.key === "Enter") add(); }}
-          />
+          <select value={draftLocId} onChange={e => setDraftLocId(e.target.value)}>
+            <option value="">— No location —</option>
+            {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
           <button className="btn" onClick={add} disabled={!draftText.trim()}>Add</button>
         </div>
       </div>
@@ -376,10 +387,17 @@ function ActionsEditor(props: {
               <div className="stack stack--tight" style={{ flex: 1 }}>
                 <input value={editingText} onChange={e => setEditingText(e.target.value)} autoFocus placeholder="Action" />
                 <input value={editingHint} onChange={e => setEditingHint(e.target.value)} placeholder="Hint (optional)" />
+                <select value={editingLocId} onChange={e => setEditingLocId(e.target.value)}>
+                  <option value="">— No location —</option>
+                  {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
               </div>
             ) : (
               <div style={{ flex: 1 }}>
                 <div className="loc-row__title" style={{ fontWeight: 500 }}>{a.text}</div>
+                {a.location_id && (
+                  <div className="loc-row__meta">@ {locName(a.location_id) ?? `loc#${a.location_id}`}</div>
+                )}
                 {a.hint && (
                   <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 2 }}>
                     Hint: {a.hint}
@@ -399,6 +417,7 @@ function ActionsEditor(props: {
                     setEditingId(a.id);
                     setEditingText(a.text);
                     setEditingHint(a.hint ?? "");
+                    setEditingLocId(a.location_id ? String(a.location_id) : "");
                   }}>Edit</button>
                   <button className="btn btn--danger btn--small" onClick={() => remove(a.id)}>Del</button>
                 </>
