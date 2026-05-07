@@ -1,12 +1,15 @@
 // Central API helper. In production /api is rewritten to the FastAPI handler.
 // In dev, Vite proxies /api to localhost:8000.
 
+export type LocationKind = "question" | "action";
+
 export type LocationHost = {
   id: number;
   name: string;
   lat: number;
   lng: number;
   radius_m: number;
+  kind: LocationKind;
   question: string;
   answer: string;
   fragment: string;
@@ -20,6 +23,7 @@ export type LocationPublic = {
   lat: number;
   lng: number;
   radius_m: number;
+  kind?: LocationKind;
   order_idx: number;
   position?: number | null;
   hint?: string | null;
@@ -86,6 +90,7 @@ export type HostDashboard = {
   teams: TeamHost[];
   progress_matrix: Record<string, Record<string, boolean>>;
   leaderboard: LeaderboardEntry[];
+  pending_stops: StopSubmission[];
   viewer_url_path?: string | null;
 };
 
@@ -93,7 +98,18 @@ export type ProgressItem = {
   location_id: number;
   solved: boolean;
   attempts: number;
+  submitted?: boolean;
   fragment?: string | null;
+};
+
+export type StopSubmission = {
+  team_id: number;
+  team_name: string;
+  team_color: string;
+  location_id: number;
+  location_name: string;
+  instruction: string;
+  submitted_at: string;
 };
 
 export type TeamState = {
@@ -272,6 +288,24 @@ export const submitAnswer = (teamId: number, teamToken: string, locationId: numb
   req<{ correct: boolean; attempts: number; fragment?: string | null; already_solved?: boolean }>(
     `/api/teams/${teamId}/answer`,
     { body: { location_id: locationId, answer }, teamToken }
+  );
+
+export const submitAction = (teamId: number, teamToken: string, locationId: number) =>
+  req<{ submitted?: boolean; submitted_at?: string; already_solved?: boolean; fragment?: string }>(
+    `/api/teams/${teamId}/submit-action`,
+    { body: { location_id: locationId }, teamToken }
+  );
+
+export const approveStop = (gameId: number, teamId: number, locationId: number, hostToken: string, hostPassword: string) =>
+  req<{ ok: boolean; team_id: number; location_id: number; solved_at: string }>(
+    `/api/games/${gameId}/teams/${teamId}/locations/${locationId}/approve`,
+    { method: "POST", hostToken, hostPassword }
+  );
+
+export const unapproveStop = (gameId: number, teamId: number, locationId: number, hostToken: string, hostPassword: string) =>
+  req<{ ok: boolean }>(
+    `/api/games/${gameId}/teams/${teamId}/locations/${locationId}/unapprove`,
+    { method: "POST", hostToken, hostPassword }
   );
 
 export const hostToggleTeamAction = (

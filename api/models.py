@@ -50,8 +50,11 @@ class Location(Base):
     lat = Column(Float, nullable=False)
     lng = Column(Float, nullable=False)
     radius_m = Column(Integer, default=40, nullable=False)
-    question = Column(Text, nullable=False)
-    answer = Column(String(200), nullable=False)
+    # "question" — auto-graded by answer match.
+    # "action"   — team submits when in range, host approves manually.
+    kind = Column(String(20), default="question", nullable=False)
+    question = Column(Text, nullable=False)  # for action stops, this is the instruction
+    answer = Column(String(200), nullable=False, default="")  # ignored for action stops
     fragment = Column(String(200), nullable=False, default="")
     hint = Column(Text, nullable=True)
     order_idx = Column(Integer, default=0, nullable=False)
@@ -90,6 +93,9 @@ class Progress(Base):
     solved = Column(Boolean, default=False)
     attempts = Column(Integer, default=0)
     solved_at = Column(DateTime, nullable=True)
+    # For action-kind locations: when the team marked themselves as ready /
+    # done. Host approval flips solved=True. Null on question-kind stops.
+    submitted_at = Column(DateTime, nullable=True)
 
     team = relationship("Team", back_populates="progress")
     location = relationship("Location")

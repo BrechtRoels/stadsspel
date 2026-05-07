@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  TeamState, fetchQuestion, submitAnswer, teamPing, teamState,
+  TeamState, fetchQuestion, submitAction, submitAnswer, teamPing, teamState,
 } from "../api";
 import MapView, { MapMarker } from "../components/MapView";
 import { haversineMeters } from "../geo";
@@ -19,7 +19,7 @@ export default function PlayerGame() {
   const [geoErr, setGeoErr] = useState("");
   const [err, setErr] = useState("");
   const [q, setQ] = useState<{
-    location_id: number; name: string; question: string; hint?: string | null; has_hint?: boolean; attempts: number; distance_m: number;
+    location_id: number; name: string; question: string; hint?: string | null; has_hint?: boolean; attempts: number; distance_m: number; kind?: string;
   } | null>(null);
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -108,6 +108,18 @@ export default function PlayerGame() {
     }
   }
 
+  async function submitForApproval() {
+    if (!q) return;
+    try {
+      await submitAction(id, token, q.location_id);
+      setFeedback({ ok: true, msg: "Submitted. The host will approve as soon as they see your proof." });
+      setQ(null);
+      setState(await teamState(id, token));
+    } catch (e: any) {
+      setFeedback({ ok: false, msg: e.message });
+    }
+  }
+
   return (
     <div className="app">
       <div className="card">
@@ -187,7 +199,12 @@ export default function PlayerGame() {
             return (
               <li key={l.id} className="loc-row" style={{ alignItems: "flex-start" }}>
                 <div style={{ flex: 1 }}>
-                  <div className="loc-row__title">{l.name}</div>
+                  <div className="loc-row__title">
+                    <span style={{ marginRight: 6 }}>
+                      {l.kind === "action" ? "🎯" : "❓"}
+                    </span>
+                    {l.name}
+                  </div>
                   <div className="loc-row__meta">
                     {distance == null
                       ? "—"
@@ -206,8 +223,12 @@ export default function PlayerGame() {
                 <div className="row">
                   {solved ? (
                     <span className="distance-tag distance-tag--done">✓ Solved</span>
-                  ) : inRange ? (
-                    <button className="btn btn--small" onClick={() => openQuestion(l.id)}>Open question</button>
+                  ) : (state.progress.find(p => p.location_id === l.id)?.submitted) ? (
+                    <span className="distance-tag distance-tag--out">⏳ Awaiting host</span>
+                  ) : (inRange || state.test_mode) ? (
+                    <button className="btn btn--small" onClick={() => openQuestion(l.id)}>
+                      {l.kind === "action" ? "Open instruction" : "Open question"}
+                    </button>
                   ) : (
                     <span className="distance-tag distance-tag--out">Out of range</span>
                   )}
@@ -219,6 +240,7 @@ export default function PlayerGame() {
         {err && <div className="banner banner--bad" style={{ marginTop: 12 }}>{err}</div>}
       </div>
 
+      {state.actions.length > 0 && (
       <div className="card">
         <div className="row" style={{ alignItems: "baseline" }}>
           <h2 style={{ margin: 0 }}>Your actions</h2>
@@ -229,7 +251,7 @@ export default function PlayerGame() {
             </span>
           )}
         </div>
-        {state.actions.length === 0 ? (
+        {false ? (
           <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
             Waiting for the host to reveal your actions. They'll appear here automatically.
           </div>
@@ -261,6 +283,7 @@ export default function PlayerGame() {
           </>
         )}
       </div>
+      )}
 
       {solvedFragments.length > 0 && (
         <div className="card">
@@ -295,34 +318,51 @@ export default function PlayerGame() {
         </div>
       )}
 
-      {q && (
-        <div className="modal-backdrop" onClick={() => setQ(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2>{q.name}</h2>
-            <div className="muted" style={{ marginBottom: 8 }}>Within {q.distance_m}m · attempts: {q.attempts}</div>
-            <p style={{ whiteSpace: "pre-wrap" }}>{q.question}</p>
-            {q.hint
-              ? <div className="banner banner--warn" style={{ marginBottom: 12 }}>Hint: {q.hint}</div>
-              : q.has_hint
-                ? <div className="banner banner--warn" style={{ marginBottom: 12 }}>🔒 A hint exists for this location but isn't unlocked yet — get more actions approved.</div>
-                : null}
-            <div>
-              <label>Your answer</label>
-              <input value={answer} onChange={e => setAnswer(e.target.value)} autoFocus />
-            </div>
-            {feedback && (
-              <div className={`banner ${feedback.ok ? "banner--good" : "banner--bad"}`} style={{ marginTop: 12 }}>
-                {feedback.msg}
+      {q && (() => {
+        const kind = state.locations.find(l => l.id === q.location_id)?.kind ?? "question";
+        const isAction = kind === "action";
+        return (
+          <div className="modal-backdrop" onClick={() => setQ(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>{isAction ? "🎯 " : "❓ "}{q.name}</h2>
+              <div className="muted" style={{ marginBottom: 8 }}>
+                {state.test_mode ? "Test mode — distance not enforced" : `Within ${q.distance_m}m`}
+                {!isAction && ` · attempts: ${q.attempts}`}
               </div>
-            )}
-            <div className="row" style={{ marginTop: 12 }}>
-              <button className="btn btn--ghost" onClick={() => setQ(null)}>Close</button>
-              <div className="spacer" />
-              <button className="btn" onClick={send} disabled={!answer.trim()}>Submit</button>
+              <p style={{ whiteSpace: "pre-wrap" }}>{q.question}</p>
+              {q.hint
+                ? <div className="banner banner--warn" style={{ marginBottom: 12 }}>Hint: {q.hint}</div>
+                : q.has_hint
+                  ? <div className="banner banner--warn" style={{ marginBottom: 12 }}>🔒 A hint exists but isn't unlocked yet.</div>
+                  : null}
+              {isAction ? (
+                <div className="banner" style={{ background: "rgba(90,185,255,0.12)", color: "#5ab9ff", marginBottom: 12 }}>
+                  Send proof to the host via WhatsApp, then tap Submit. The host will approve once they've seen it.
+                </div>
+              ) : (
+                <div>
+                  <label>Your answer</label>
+                  <input value={answer} onChange={e => setAnswer(e.target.value)} autoFocus />
+                </div>
+              )}
+              {feedback && (
+                <div className={`banner ${feedback.ok ? "banner--good" : "banner--bad"}`} style={{ marginTop: 12 }}>
+                  {feedback.msg}
+                </div>
+              )}
+              <div className="row" style={{ marginTop: 12 }}>
+                <button className="btn btn--ghost" onClick={() => setQ(null)}>Close</button>
+                <div className="spacer" />
+                {isAction ? (
+                  <button className="btn" onClick={submitForApproval}>Submit for approval</button>
+                ) : (
+                  <button className="btn" onClick={send} disabled={!answer.trim()}>Submit</button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {feedback && !q && (
         <div className="modal-backdrop" onClick={() => setFeedback(null)}>

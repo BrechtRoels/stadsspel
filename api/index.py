@@ -51,9 +51,17 @@ def _migrate_additive() -> None:
                 conn.execute(text("ALTER TABLE actions ADD COLUMN location_id INTEGER"))
     if "progress" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("progress")}
-        if "position" not in cols:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if "position" not in cols:
                 conn.execute(text("ALTER TABLE progress ADD COLUMN position INTEGER"))
+            if "submitted_at" not in cols:
+                conn.execute(text("ALTER TABLE progress ADD COLUMN submitted_at TIMESTAMP"))
+    if "locations" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("locations")}
+        if "kind" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE locations ADD COLUMN kind TEXT DEFAULT 'question'"))
+                conn.execute(text("UPDATE locations SET kind = 'question' WHERE kind IS NULL"))
     if "games" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("games")}
         with engine.begin() as conn:
@@ -297,29 +305,34 @@ def _lock_and_randomize(db: Session, game: models.Game) -> int:
     return randomized
 
 
-# Scoring weights — kept intentionally simple so the formula is explainable
-# and tweaks don't ripple through the codebase.
+# Scoring weights. Each solved stop (question or action) is worth the same.
 _SCORE_PER_SOLVED = 100
-_SCORE_PER_ACTION = 30
 _SCORE_PER_WRONG = -2
 
 
 def _team_score_breakdown(team: models.Team) -> dict:
     """Returns components used both for the score and for tiebreaking."""
     solved_count = sum(1 for p in team.progress if p.solved)
-    total_attempts = sum((p.attempts or 0) for p in team.progress)
-    # A team that solves a question on attempt N has 1 correct + (N-1) wrong.
-    wrong_attempts = max(0, total_attempts - solved_count)
+    # Wrong attempts only apply to question stops (actions never count attempts).
+    locs_by_id = {l.id: l for l in team.game.locations}
+    total_question_attempts = 0
+    question_solves = 0
+    for p in team.progress:
+        loc = locs_by_id.get(p.location_id)
+        if loc and loc.kind == "action":
+            continue
+        total_question_attempts += (p.attempts or 0)
+        if p.solved:
+            question_solves += 1
+    wrong_attempts = max(0, total_question_attempts - question_solves)
+    # Legacy: count old-style approved bonus actions too — does not affect
+    # score by default but stays visible in counters.
     actions_done = sum(1 for ta in team.actions if ta.completed)
     last_solve = max(
         (p.solved_at for p in team.progress if p.solved and p.solved_at),
         default=None,
     )
-    score = (
-        solved_count * _SCORE_PER_SOLVED
-        + actions_done * _SCORE_PER_ACTION
-        + wrong_attempts * _SCORE_PER_WRONG
-    )
+    score = solved_count * _SCORE_PER_SOLVED + wrong_attempts * _SCORE_PER_WRONG
     return {
         "solved_count": solved_count,
         "wrong_attempts": wrong_attempts,
@@ -506,6 +519,27 @@ def _build_dashboard(db: Session, game: models.Game, *, hide_host_token: bool = 
         matrix[t.id] = {}
         for p in t.progress:
             matrix[t.id][p.location_id] = bool(p.solved)
+
+    locs_by_id = {l.id: l for l in game.locations}
+    pending: list[schemas.StopSubmission] = []
+    for t in game.teams:
+        for p in t.progress:
+            if not p.submitted_at or p.solved:
+                continue
+            loc = locs_by_id.get(p.location_id)
+            if not loc or loc.kind != "action":
+                continue
+            pending.append(schemas.StopSubmission(
+                team_id=t.id,
+                team_name=t.name,
+                team_color=t.color,
+                location_id=loc.id,
+                location_name=loc.name,
+                instruction=loc.question or "",
+                submitted_at=p.submitted_at,
+            ))
+    pending.sort(key=lambda x: x.submitted_at)
+
     viewer_token = _ensure_viewer_token(db, game)
     out_game = schemas.GameHostOut.from_orm_game(game)
     if hide_host_token:
@@ -515,6 +549,7 @@ def _build_dashboard(db: Session, game: models.Game, *, hide_host_token: bool = 
         teams=teams,
         progress_matrix=matrix,
         leaderboard=_leaderboard_entries(game),
+        pending_stops=pending,
         viewer_url_path=f"/view/{game.id}#v={viewer_token}",
     )
 
@@ -611,6 +646,24 @@ def stop_game(
 
 # ---------- host: locations ----------
 
+def _normalize_location_payload(payload: schemas.LocationIn) -> dict:
+    """Force consistent shape based on kind. For action stops we ignore the
+    answer field entirely so the host can't accidentally trip auto-grading."""
+    data = payload.model_dump()
+    kind = (data.get("kind") or "question").strip().lower()
+    if kind not in ("question", "action"):
+        raise HTTPException(status_code=400, detail="kind must be 'question' or 'action'")
+    data["kind"] = kind
+    if kind == "action":
+        data["answer"] = ""  # not used; keep it empty
+    elif not (data.get("answer") or "").strip():
+        raise HTTPException(status_code=400, detail="Question stops need an answer.")
+    if not (data.get("question") or "").strip():
+        label = "instruction" if kind == "action" else "question"
+        raise HTTPException(status_code=400, detail=f"The {label} text is required.")
+    return data
+
+
 @app.post("/api/games/{game_id}/locations", response_model=schemas.LocationHostOut)
 def add_location(
     game_id: int,
@@ -620,7 +673,7 @@ def add_location(
     db: Session = Depends(get_db),
 ):
     _require_host(db, game_id, x_host_token, x_host_password)
-    loc = models.Location(game_id=game_id, **payload.model_dump())
+    loc = models.Location(game_id=game_id, **_normalize_location_payload(payload))
     db.add(loc)
     db.commit()
     db.refresh(loc)
@@ -642,7 +695,7 @@ def update_location(
     ).first()
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
-    for k, v in payload.model_dump().items():
+    for k, v in _normalize_location_payload(payload).items():
         setattr(loc, k, v)
     db.commit()
     db.refresh(loc)
@@ -826,6 +879,7 @@ def _state_for(db: Session, team: models.Team) -> schemas.TeamStateOut:
                 location_id=p.location_id,
                 solved=bool(p.solved),
                 attempts=p.attempts or 0,
+                submitted=bool(p.submitted_at and not p.solved),
                 fragment=(loc.fragment if (loc and p.solved) else None),
             ))
         all_solved = bool(full_rows) and all(p.solved for p in full_rows)
@@ -840,6 +894,7 @@ def _state_for(db: Session, team: models.Team) -> schemas.TeamStateOut:
                 location_id=loc.id,
                 solved=bool(p and p.solved),
                 attempts=(p.attempts if p else 0),
+                submitted=bool(p and p.submitted_at and not p.solved),
                 fragment=(loc.fragment if (p and p.solved) else None),
             ))
         all_solved = bool(locs) and all(prog_by_loc.get(l.id) and prog_by_loc[l.id].solved for l in locs)
@@ -862,6 +917,7 @@ def _state_for(db: Session, team: models.Team) -> schemas.TeamStateOut:
             lat=loc.lat,
             lng=loc.lng,
             radius_m=loc.radius_m,
+            kind=loc.kind or "question",
             order_idx=loc.order_idx,
             position=position,
             has_hint=bool(loc.hint),
@@ -1013,6 +1069,12 @@ def submit_answer(
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
 
+    if loc.kind == "action":
+        raise HTTPException(
+            status_code=400,
+            detail="This is an action stop — submit it via /submit-action and wait for host approval.",
+        )
+
     if not _location_visible_to(team, loc.id):
         raise HTTPException(
             status_code=403,
@@ -1052,6 +1114,118 @@ def submit_answer(
         "attempts": prog.attempts,
         "fragment": loc.fragment if correct else None,
     }
+
+
+from pydantic import BaseModel as _BaseModel
+
+
+class _SubmitActionIn(_BaseModel):
+    location_id: int
+
+
+@app.post("/api/teams/{team_id}/submit-action")
+def submit_action(
+    team_id: int,
+    payload: _SubmitActionIn,
+    x_team_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Player marks an action stop as 'done — please approve' once they're in
+    range. Host approves via the dashboard to advance the team."""
+    team = _require_team(db, team_id, x_team_token)
+    loc = db.query(models.Location).filter(
+        models.Location.id == payload.location_id, models.Location.game_id == team.game_id
+    ).first()
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    if loc.kind != "action":
+        raise HTTPException(status_code=400, detail="Not an action stop.")
+    if not _location_visible_to(team, loc.id):
+        raise HTTPException(status_code=403, detail="This location isn't on your team's current step.")
+
+    if not team.game.test_mode:
+        if team.last_lat is None or team.last_lng is None:
+            raise HTTPException(status_code=400, detail="No location ping recorded yet")
+        distance = _haversine_m(team.last_lat, team.last_lng, loc.lat, loc.lng)
+        if distance > loc.radius_m:
+            raise HTTPException(status_code=403, detail=f"Out of range ({int(distance)}m, need ≤{loc.radius_m}m)")
+
+    prog = db.query(models.Progress).filter(
+        models.Progress.team_id == team.id, models.Progress.location_id == loc.id
+    ).first()
+    if not prog:
+        prog = models.Progress(team_id=team.id, location_id=loc.id, attempts=0, solved=False)
+        db.add(prog)
+        db.flush()
+    if prog.solved:
+        return {"already_solved": True, "fragment": loc.fragment}
+    prog.submitted_at = datetime.utcnow()
+    db.commit()
+    return {"submitted": True, "submitted_at": prog.submitted_at}
+
+
+@app.post("/api/games/{game_id}/teams/{team_id}/locations/{location_id}/approve")
+def approve_action_stop(
+    game_id: int,
+    team_id: int,
+    location_id: int,
+    x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Host approves a team's action-stop submission. Marks Progress.solved
+    so the team's sequence advances. Distance is not re-checked (the server
+    accepted the original submission and the host has out-of-band proof)."""
+    _require_host(db, game_id, x_host_token, x_host_password)
+    team = db.query(models.Team).filter(
+        models.Team.id == team_id, models.Team.game_id == game_id
+    ).first()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    loc = db.query(models.Location).filter(
+        models.Location.id == location_id, models.Location.game_id == game_id
+    ).first()
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    if loc.kind != "action":
+        raise HTTPException(status_code=400, detail="Not an action stop.")
+
+    prog = db.query(models.Progress).filter(
+        models.Progress.team_id == team.id, models.Progress.location_id == loc.id
+    ).first()
+    if not prog:
+        prog = models.Progress(team_id=team.id, location_id=loc.id, attempts=0, solved=False)
+        db.add(prog)
+        db.flush()
+    prog.solved = True
+    prog.solved_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "team_id": team.id, "location_id": loc.id, "solved_at": prog.solved_at}
+
+
+@app.post("/api/games/{game_id}/teams/{team_id}/locations/{location_id}/unapprove")
+def unapprove_action_stop(
+    game_id: int,
+    team_id: int,
+    location_id: int,
+    x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Reverse an approval (in case the host clicked the wrong row)."""
+    _require_host(db, game_id, x_host_token, x_host_password)
+    prog = db.query(models.Progress).join(models.Location).filter(
+        models.Progress.team_id == team_id,
+        models.Progress.location_id == location_id,
+        models.Location.game_id == game_id,
+        models.Location.kind == "action",
+    ).first()
+    if not prog:
+        raise HTTPException(status_code=404, detail="No such action progress")
+    prog.solved = False
+    prog.solved_at = None
+    db.commit()
+    return {"ok": True}
 
 
 # Vercel @vercel/python runtime picks up `app` (ASGI) automatically.

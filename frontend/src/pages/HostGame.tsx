@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  Action, HostDashboard, LocationHost, PASSWORD_REQUIRED_MARKER,
-  addAction, addLocation, deleteAction, deleteLocation, getHostDashboard,
-  hostToggleTeamAction, reassignActions, setHostPassword, startGame, stopGame,
-  toggleTestMode, updateAction, updateGame, updateLocation,
+  HostDashboard, LocationHost, PASSWORD_REQUIRED_MARKER,
+  addLocation, approveStop, deleteLocation, getHostDashboard,
+  hostToggleTeamAction, setHostPassword, startGame, stopGame,
+  toggleTestMode, updateGame, updateLocation,
 } from "../api";
 import MapView, { MapMarker } from "../components/MapView";
 
@@ -18,6 +18,7 @@ const blankLoc: Omit<LocationHost, "id"> = {
   lat: DEFAULT_CENTER[0],
   lng: DEFAULT_CENTER[1],
   radius_m: 40,
+  kind: "question",
   question: "",
   answer: "",
   fragment: "",
@@ -330,7 +331,12 @@ function SetupTab(props: {
         {game.locations.map(l => (
           <li key={l.id} className="loc-row">
             <div>
-              <div className="loc-row__title">{l.name}</div>
+              <div className="loc-row__title">
+                <span style={{ marginRight: 8 }} title={l.kind === "action" ? "Action stop (host approves)" : "Question stop (auto-graded)"}>
+                  {l.kind === "action" ? "🎯" : "❓"}
+                </span>
+                {l.name}
+              </div>
               <div className="loc-row__meta">
                 {l.lat.toFixed(5)}, {l.lng.toFixed(5)} · radius {l.radius_m}m · fragment <span className="fragment-pill">{l.fragment || "—"}</span>
               </div>
@@ -357,175 +363,13 @@ function SetupTab(props: {
         setErr={setErr}
       />
 
-      <h2 style={{ marginTop: 16 }}>Actions pool</h2>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-        Build the pool first, then click <em>Reveal actions</em> when you're ready. Each team gets 3 random actions from the pool. Players don't see anything until you reveal — and each approved action unlocks one location's hint, in order.
-      </div>
-      <ActionsEditor
-        gameId={gameId}
-        hostToken={hostToken}
-        hostPassword={hostPassword}
-        actions={game.actions}
-        locations={game.locations}
-        teamCount={teamCount}
-        teamsWithActions={teamsWithActions}
-        reload={reload}
-        setErr={setErr}
-      />
+      {/* Bonus actions pool removed: each location now picks its own kind
+          (question vs action). Use the "+ Add location" → 🎯 Action option
+          to add an action-stop. */}
     </div>
   );
 }
 
-function ActionsEditor(props: {
-  gameId: number;
-  hostToken: string;
-  hostPassword: string;
-  actions: Action[];
-  locations: LocationHost[];
-  teamCount: number;
-  teamsWithActions: number;
-  reload: () => void;
-  setErr: (s: string) => void;
-}) {
-  const { gameId, hostToken, hostPassword, actions, locations, teamCount, teamsWithActions, reload, setErr } = props;
-  const [draftText, setDraftText] = useState("");
-  const [draftHint, setDraftHint] = useState("");
-  const [draftLocId, setDraftLocId] = useState<string>("");
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editingText, setEditingText] = useState("");
-  const [editingHint, setEditingHint] = useState("");
-  const [editingLocId, setEditingLocId] = useState<string>("");
-
-  const initialReveal = teamsWithActions === 0;
-  const revealLabel = initialReveal
-    ? `Reveal actions to teams (${teamCount})`
-    : "Top up team actions";
-  const locName = (id?: number | null) =>
-    id == null ? null : (locations.find(l => l.id === id)?.name ?? null);
-
-  async function add() {
-    const t = draftText.trim();
-    if (!t) return;
-    try {
-      await addAction(gameId, hostToken, hostPassword, t, draftHint.trim() || null, draftLocId ? Number(draftLocId) : null);
-      setDraftText(""); setDraftHint(""); setDraftLocId("");
-      reload();
-    } catch (e: any) { setErr(e.message); }
-  }
-  async function save(id: number) {
-    const t = editingText.trim();
-    if (!t) return;
-    try {
-      await updateAction(gameId, id, hostToken, hostPassword, t, editingHint.trim() || null, editingLocId ? Number(editingLocId) : null);
-      setEditingId(null);
-      reload();
-    } catch (e: any) { setErr(e.message); }
-  }
-  async function remove(id: number) {
-    if (!confirm("Delete this action?")) return;
-    try { await deleteAction(gameId, id, hostToken, hostPassword); reload(); }
-    catch (e: any) { setErr(e.message); }
-  }
-  async function reveal() {
-    if (initialReveal && actions.length < 3) {
-      if (!confirm(`Only ${actions.length} action(s) in the pool — teams will get fewer than 3. Continue?`)) return;
-    }
-    try { const r = await reassignActions(gameId, hostToken, hostPassword); alert(`Assigned to ${r.teams} team(s).`); reload(); }
-    catch (e: any) { setErr(e.message); }
-  }
-
-  return (
-    <div className="stack">
-      <div className="stack stack--tight">
-        <input
-          value={draftText}
-          onChange={e => setDraftText(e.target.value)}
-          placeholder="Action — e.g. Take a selfie with a stranger"
-          onKeyDown={e => { if (e.key === "Enter") add(); }}
-        />
-        <input
-          value={draftHint}
-          onChange={e => setDraftHint(e.target.value)}
-          placeholder="Hint shown to the team (optional)"
-          onKeyDown={e => { if (e.key === "Enter") add(); }}
-        />
-        <div className="row">
-          <select value={draftLocId} onChange={e => setDraftLocId(e.target.value)}>
-            <option value="">— No location —</option>
-            {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-          <button className="btn" onClick={add} disabled={!draftText.trim()}>Add</button>
-        </div>
-      </div>
-      <ul className="loc-list">
-        {actions.map(a => (
-          <li key={a.id} className="loc-row" style={{ alignItems: "flex-start" }}>
-            {editingId === a.id ? (
-              <div className="stack stack--tight" style={{ flex: 1 }}>
-                <input value={editingText} onChange={e => setEditingText(e.target.value)} autoFocus placeholder="Action" />
-                <input value={editingHint} onChange={e => setEditingHint(e.target.value)} placeholder="Hint (optional)" />
-                <select value={editingLocId} onChange={e => setEditingLocId(e.target.value)}>
-                  <option value="">— No location —</option>
-                  {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
-              </div>
-            ) : (
-              <div style={{ flex: 1 }}>
-                <div className="loc-row__title" style={{ fontWeight: 500 }}>{a.text}</div>
-                {a.location_id && (
-                  <div className="loc-row__meta">@ {locName(a.location_id) ?? `loc#${a.location_id}`}</div>
-                )}
-                {a.hint && (
-                  <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 2 }}>
-                    Hint: {a.hint}
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="row">
-              {editingId === a.id ? (
-                <>
-                  <button className="btn btn--small" onClick={() => save(a.id)}>Save</button>
-                  <button className="btn btn--ghost btn--small" onClick={() => setEditingId(null)}>Cancel</button>
-                </>
-              ) : (
-                <>
-                  <button className="btn btn--ghost btn--small" onClick={() => {
-                    setEditingId(a.id);
-                    setEditingText(a.text);
-                    setEditingHint(a.hint ?? "");
-                    setEditingLocId(a.location_id ? String(a.location_id) : "");
-                  }}>Edit</button>
-                  <button className="btn btn--danger btn--small" onClick={() => remove(a.id)}>Del</button>
-                </>
-              )}
-            </div>
-          </li>
-        ))}
-        {actions.length === 0 && <div className="muted">No actions yet.</div>}
-      </ul>
-      {actions.length > 0 && teamCount > 0 && (
-        <div className="row">
-          <div className="muted" style={{ fontSize: 12 }}>
-            {initialReveal
-              ? `${teamCount} team(s) joined and waiting. Reveal when ready.`
-              : "Click again only if you added more actions to the pool — fills missing slots, never reshuffles."}
-          </div>
-          <div className="spacer" />
-          <button
-            className={initialReveal ? "btn" : "btn btn--ghost btn--small"}
-            onClick={reveal}
-          >{revealLabel}</button>
-        </div>
-      )}
-      {actions.length > 0 && teamCount === 0 && (
-        <div className="muted" style={{ fontSize: 12 }}>
-          No teams have joined yet — share the join code with your players.
-        </div>
-      )}
-    </div>
-  );
-}
 
 function LiveTab(props: {
   data: HostDashboard;
@@ -548,16 +392,13 @@ function LiveTab(props: {
       reload();
     } catch (e: any) { setErr(e.message); }
   }
-
-  const teamsWithActions = data.teams.filter(t => t.actions_total > 0).length;
-  const teamsMissingActions = data.teams.length - teamsWithActions;
-  async function reveal() {
-    if (teamsWithActions === 0 && data.game.actions.length < 3) {
-      if (!confirm(`Only ${data.game.actions.length} action(s) in the pool — teams will get fewer than 3. Continue?`)) return;
-    }
-    try { const r = await reassignActions(gameId, hostToken, hostPassword); alert(`Assigned to ${r.teams} team(s).`); reload(); }
-    catch (e: any) { setErr(e.message); }
+  async function approveStopFn(teamId: number, locationId: number) {
+    try {
+      await approveStop(gameId, teamId, locationId, hostToken, hostPassword);
+      reload();
+    } catch (e: any) { setErr(e.message); }
   }
+
   const teamMarkers: MapMarker[] = teams
     .filter(t => t.last_lat != null && t.last_lng != null)
     .map(t => ({ id: `t-${t.id}`, lat: t.last_lat!, lng: t.last_lng!, label: `${t.name} (${t.solved_count}/${t.total})`, color: t.color }));
@@ -566,11 +407,7 @@ function LiveTab(props: {
     id: `l-${l.id}`, lat: l.lat, lng: l.lng, label: l.name, radius_m: l.radius_m, showRadius: true,
   }));
 
-  const totalActionsAssigned = teams.reduce((acc, t) => acc + t.actions_total, 0);
-  const totalActionsApproved = teams.reduce((acc, t) => acc + t.actions_done, 0);
-  const pendingByTeam = teams
-    .map(t => ({ team: t, pending: t.actions.filter(a => !a.completed) }))
-    .filter(x => x.pending.length > 0);
+  const pendingStops = data.pending_stops || [];
 
   // Sort teams by rank (best first). Backend already computed rank/score.
   const ranked = [...teams].sort((a, b) => (a.rank || 999) - (b.rank || 999));
@@ -602,45 +439,28 @@ function LiveTab(props: {
         </>
       )}
 
-      {data.game.actions.length > 0 && data.teams.length > 0 && teamsMissingActions > 0 && (
-        <div className="banner banner--warn" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ flex: 1 }}>
-            {teamsWithActions === 0
-              ? `Actions are not yet revealed. ${data.teams.length} team(s) waiting — they don't see actions until you click reveal.`
-              : `${teamsMissingActions} team(s) joined after the reveal — top up to give them their 3 actions.`}
-          </div>
-          <button className="btn btn--small" onClick={reveal}>
-            {teamsWithActions === 0 ? `Reveal actions (${data.teams.length})` : "Top up"}
-          </button>
-        </div>
-      )}
-
-      {pendingByTeam.length > 0 && (
+      {pendingStops.length > 0 && (
         <>
-          <h2>Pending approvals <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· {totalActionsApproved}/{totalActionsAssigned} approved overall</span></h2>
+          <h2>Pending approvals <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· {pendingStops.length} waiting</span></h2>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-            Teams send proof via WhatsApp. Click <em>Approve</em> once you've seen it.
+            Teams have submitted these action stops and are waiting for you. Click <em>Approve</em> once you've seen the proof.
           </div>
           <ul className="loc-list">
-            {pendingByTeam.flatMap(({ team, pending }) =>
-              pending.map(a => (
-                <li key={`${team.id}-${a.id}`} className="loc-row" style={{ alignItems: "flex-start" }}>
-                  <div style={{ flex: 1 }}>
-                    <div className="loc-row__title">
-                      <span className="dot" style={{ background: team.color, marginRight: 8 }} />
-                      {team.name}
-                    </div>
-                    <div className="loc-row__meta">{a.text}</div>
-                    {a.hint && (
-                      <div className="loc-row__meta" style={{ color: "var(--warn)", marginTop: 2 }}>
-                        Hint: {a.hint}
-                      </div>
-                    )}
+            {pendingStops.map(s => (
+              <li key={`${s.team_id}-${s.location_id}`} className="loc-row" style={{ alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div className="loc-row__title">
+                    <span className="dot" style={{ background: s.team_color, marginRight: 8 }} />
+                    {s.team_name} <span className="muted" style={{ fontSize: 12 }}>@ {s.location_name}</span>
                   </div>
-                  <button className="btn btn--small" onClick={() => approve(team.id, a.id)}>Approve</button>
-                </li>
-              ))
-            )}
+                  <div className="loc-row__meta">{s.instruction}</div>
+                  <div className="loc-row__meta" style={{ fontSize: 11 }}>
+                    submitted {new Date(s.submitted_at).toLocaleTimeString()}
+                  </div>
+                </div>
+                <button className="btn btn--small" onClick={() => approveStopFn(s.team_id, s.location_id)}>Approve</button>
+              </li>
+            ))}
           </ul>
         </>
       )}
@@ -846,6 +666,26 @@ function LocationModal(props: {
         <h2>{editing ? "Edit location" : "Add location"}</h2>
         <div className="stack">
           <div>
+            <label>Stop type</label>
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                type="button"
+                className={`tab ${draft.kind === "question" ? "active" : ""}`}
+                onClick={() => set("kind", "question")}
+              >❓ Question</button>
+              <button
+                type="button"
+                className={`tab ${draft.kind === "action" ? "active" : ""}`}
+                onClick={() => set("kind", "action")}
+              >🎯 Action</button>
+            </div>
+            <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+              {draft.kind === "action"
+                ? "Players submit when they're at the spot; you approve manually after seeing their proof."
+                : "Auto-graded: players answer to advance."}
+            </div>
+          </div>
+          <div>
             <label>Name</label>
             <input value={draft.name} onChange={e => set("name", e.target.value)} />
           </div>
@@ -877,13 +717,15 @@ function LocationModal(props: {
             </div>
           </div>
           <div>
-            <label>Question</label>
+            <label>{draft.kind === "action" ? "Action instruction (what should the team do?)" : "Question"}</label>
             <textarea rows={3} value={draft.question} onChange={e => set("question", e.target.value)} />
           </div>
-          <div>
-            <label>Answer (case- and punctuation-insensitive)</label>
-            <input value={draft.answer} onChange={e => set("answer", e.target.value)} />
-          </div>
+          {draft.kind === "question" && (
+            <div>
+              <label>Answer (case- and punctuation-insensitive)</label>
+              <input value={draft.answer} onChange={e => set("answer", e.target.value)} />
+            </div>
+          )}
           <div>
             <label>Hint (optional) — unlocks for teams as they get actions approved</label>
             <input value={draft.hint ?? ""} onChange={e => set("hint", e.target.value)} />
@@ -896,7 +738,11 @@ function LocationModal(props: {
           <div className="row">
             <button className="btn btn--ghost" onClick={onClose}>Cancel</button>
             <div className="spacer" />
-            <button className="btn" onClick={trySave} disabled={!draft.name || !draft.question || !draft.answer}>
+            <button
+              className="btn"
+              onClick={trySave}
+              disabled={!draft.name || !draft.question || (draft.kind === "question" && !draft.answer)}
+            >
               {editing ? "Save changes" : "Add location"}
             </button>
           </div>

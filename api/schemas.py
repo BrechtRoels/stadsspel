@@ -8,8 +8,12 @@ class LocationIn(BaseModel):
     lat: float
     lng: float
     radius_m: int = Field(default=40, ge=5, le=2000)
-    question: str
-    answer: str
+    # "question" → host writes Q + A, players answer to advance.
+    # "action"   → host writes a description, players submit when in range,
+    #              host approves manually. `answer` is ignored.
+    kind: str = "question"
+    question: str  # holds the instruction for action stops too
+    answer: str = ""
     fragment: str = ""
     hint: Optional[str] = None
     order_idx: int = 0
@@ -21,20 +25,13 @@ class LocationHostOut(LocationIn):
 
 
 class LocationPublicOut(BaseModel):
-    """What players see — no answer leaked.
-
-    `hint` is filled only when the team has unlocked it (approved actions ≥
-    this location's index in order). `has_hint` tells the UI whether a hint
-    exists at all, so it can show a "locked" placeholder when appropriate.
-
-    `position` is the team-specific index in their randomized sequence; the UI
-    sorts by it. Null in the legacy "all-visible" mode (game not locked yet).
-    """
+    """What players see — no answer leaked."""
     id: int
     name: str
     lat: float
     lng: float
     radius_m: int
+    kind: str = "question"
     order_idx: int
     position: Optional[int] = None
     hint: Optional[str] = None
@@ -199,6 +196,7 @@ class ProgressItem(BaseModel):
     location_id: int
     solved: bool
     attempts: int
+    submitted: bool = False  # for action stops: team has submitted, awaiting host approval
     fragment: Optional[str] = None  # only if solved
 
 
@@ -221,11 +219,23 @@ class TeamStateOut(BaseModel):
     test_mode: bool = False
 
 
+class StopSubmission(BaseModel):
+    """A team that's submitted an action-stop and is awaiting host approval."""
+    team_id: int
+    team_name: str
+    team_color: str
+    location_id: int
+    location_name: str
+    instruction: str
+    submitted_at: datetime
+
+
 class HostDashboardOut(BaseModel):
     game: GameHostOut
     teams: List[TeamHostOut]
     progress_matrix: dict  # {team_id: {location_id: solved_bool}}
     leaderboard: List[LeaderboardEntry] = []
+    pending_stops: List[StopSubmission] = []
     viewer_url_path: Optional[str] = None  # frontend prepends origin
 
 
