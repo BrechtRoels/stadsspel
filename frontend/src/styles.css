@@ -147,8 +147,10 @@ label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px
 
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: flex-start; justify-content: center;
   padding: 16px; z-index: 1000;
+  overflow-y: auto;          /* fallback: backdrop scrolls if modal can't */
+  -webkit-overflow-scrolling: touch;
 }
 .modal {
   background: var(--card);
@@ -157,6 +159,10 @@ label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px
   padding: 20px;
   max-width: 480px;
   width: 100%;
+  max-height: calc(100vh - 32px);   /* leave room for the backdrop padding */
+  overflow-y: auto;                  /* scroll inside the modal */
+  -webkit-overflow-scrolling: touch;
+  margin: auto;                      /* vertically center when content is short */
 }
 
 .tab-row { display: flex; gap: 4px; margin-bottom: 12px; }
