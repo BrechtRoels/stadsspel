@@ -5,6 +5,7 @@ import "leaflet/dist/leaflet.css";
 import "./styles.css";
 import Home from "./pages/Home";
 import HostNew from "./pages/HostNew";
+import HostSignIn from "./pages/HostSignIn";
 import HostGame from "./pages/HostGame";
 import PlayerJoin from "./pages/PlayerJoin";
 import PlayerGame from "./pages/PlayerGame";
@@ -14,6 +15,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/host" element={<HostSignIn />} />
         <Route path="/host/new" element={<HostNew />} />
         <Route path="/host/:gameId" element={<HostGame />} />
         <Route path="/play" element={<PlayerJoin />} />

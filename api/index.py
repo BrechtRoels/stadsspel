@@ -329,6 +329,20 @@ def create_game(payload: schemas.GameCreate, db: Session = Depends(get_db)):
     return game
 
 
+@app.post("/api/host/recover", response_model=schemas.HostRecoverOut)
+def host_recover(payload: schemas.HostRecoverIn, db: Session = Depends(get_db)):
+    """Look up a game by its host token. The token is the only secret the
+    host needs to remember — it's unique-indexed and gives full host control.
+    """
+    token = (payload.host_token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Host token is required")
+    game = db.query(models.Game).filter(models.Game.host_token == token).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Unknown host token")
+    return schemas.HostRecoverOut(game_id=game.id, name=game.name, join_code=game.join_code)
+
+
 @app.get("/api/games/{game_id}/host", response_model=schemas.HostDashboardOut)
 def host_dashboard(
     game_id: int,

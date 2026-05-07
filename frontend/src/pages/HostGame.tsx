@@ -28,7 +28,20 @@ export default function HostGame() {
   const { gameId } = useParams();
   const nav = useNavigate();
   const id = Number(gameId);
-  const hostToken = useMemo(() => localStorage.getItem(`host:${id}`) || "", [id]);
+  const hostToken = useMemo(() => {
+    const stored = localStorage.getItem(`host:${id}`);
+    if (stored) return stored;
+    // Fall back to a token in the URL fragment, e.g. #t=abc123…
+    // Fragments aren't sent to the server so they're safer than query params.
+    const fromHash = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("t");
+    if (fromHash) {
+      localStorage.setItem(`host:${id}`, fromHash);
+      // Clear the hash so the token isn't visible in the URL bar afterwards.
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+      return fromHash;
+    }
+    return "";
+  }, [id]);
 
   const [tab, setTab] = useState<Tab>("setup");
   const [data, setData] = useState<HostDashboard | null>(null);
@@ -40,7 +53,7 @@ export default function HostGame() {
   });
 
   async function reload() {
-    if (!hostToken) { nav("/"); return; }
+    if (!hostToken) { nav("/host"); return; }
     try {
       const d = await getHostDashboard(id, hostToken);
       setData(d);

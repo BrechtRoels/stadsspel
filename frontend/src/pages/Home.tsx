@@ -14,6 +14,11 @@ export default function Home() {
             Join as a team
           </Link>
         </div>
+        <div style={{ marginTop: 12, textAlign: "center" }}>
+          <Link to="/host" className="muted" style={{ fontSize: 13 }}>
+            Resume hosting an existing game →
+          </Link>
+        </div>
         <hr style={{ borderColor: "var(--border)", margin: "20px 0" }} />
         <h2>How it works</h2>
         <ol className="list-bullet muted">

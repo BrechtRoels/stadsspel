@@ -142,6 +142,12 @@ async function req<T>(
 export const createGame = (name: string) =>
   req<GameHost>("/api/games", { body: { name } });
 
+export const hostRecover = (host_token: string) =>
+  req<{ game_id: number; name: string; join_code: string }>(
+    "/api/host/recover",
+    { body: { host_token } }
+  );
+
 export const updateGame = (
   gameId: number,
   hostToken: string,

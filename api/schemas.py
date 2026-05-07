@@ -49,6 +49,16 @@ class GameCreate(BaseModel):
     final_label: Optional[str] = None
 
 
+class HostRecoverIn(BaseModel):
+    host_token: str
+
+
+class HostRecoverOut(BaseModel):
+    game_id: int
+    name: str
+    join_code: str
+
+
 class ActionIn(BaseModel):
     text: str
     hint: Optional[str] = None
