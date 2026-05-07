@@ -27,6 +27,13 @@ class Game(Base):
     final_lng = Column(Float, nullable=True)
     final_label = Column(String(200), nullable=True)
     started = Column(Boolean, default=False)
+    # When True, geofencing is skipped — the host can validate the flow
+    # without walking around. Visibility / sequence gates still apply.
+    test_mode = Column(Boolean, default=False, nullable=False)
+    # Read-only "watch the host screen" token. Generated lazily; anyone
+    # with the URL `/view/<gameId>#v=<viewer_token>` can watch the live
+    # dashboard but cannot mutate anything.
+    viewer_token = Column(String(64), nullable=True, unique=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     locations = relationship("Location", back_populates="game", cascade="all, delete-orphan", order_by="Location.order_idx")

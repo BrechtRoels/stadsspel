@@ -4,7 +4,7 @@ import {
   Action, HostDashboard, LocationHost, PASSWORD_REQUIRED_MARKER,
   addAction, addLocation, deleteAction, deleteLocation, getHostDashboard,
   hostToggleTeamAction, reassignActions, setHostPassword, startGame, stopGame,
-  updateAction, updateGame, updateLocation,
+  toggleTestMode, updateAction, updateGame, updateLocation,
 } from "../api";
 import MapView, { MapMarker } from "../components/MapView";
 
@@ -124,6 +124,10 @@ export default function HostGame() {
     if (!confirm("Stop the game? Teams will see it as no longer live; you can resume any time.")) return;
     try { await stopGame(id, hostToken, hostPassword); reload(); } catch (e: any) { setErr(e.message); }
   }
+  async function setTest(enabled: boolean) {
+    try { await toggleTestMode(id, hostToken, hostPassword, enabled); reload(); }
+    catch (e: any) { setErr(e.message); }
+  }
 
   function openNewLoc() {
     setEditingId(null);
@@ -176,9 +180,26 @@ export default function HostGame() {
             <button className="btn btn--small" onClick={startNow}>Start (lock teams &amp; randomize)</button>
           )}
         </div>
-        <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-          Players join at <code>{location.origin}/play</code> with the code above.
+        <div className="row" style={{ marginTop: 8, gap: 12 }}>
+          <div className="muted" style={{ fontSize: 12 }}>
+            Players join at <code>{location.origin}/play</code> with the code above.
+          </div>
+          <div className="spacer" />
+          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, margin: 0 }}>
+            <input
+              type="checkbox"
+              checked={!!game.test_mode}
+              onChange={e => setTest(e.target.checked)}
+              style={{ width: "auto" }}
+            />
+            <span>Test mode <span className="muted">(skip geofence)</span></span>
+          </label>
         </div>
+        {game.test_mode && (
+          <div className="banner banner--warn" style={{ marginTop: 8 }}>
+            ⚠ <strong>TEST MODE</strong> is on — teams can answer questions without being in range. Turn off before the real game.
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -206,6 +227,7 @@ export default function HostGame() {
             setErr={setErr}
             teamCount={data.teams.length}
             teamsWithActions={data.teams.filter(t => t.actions_total > 0).length}
+            viewerUrlPath={data.viewer_url_path ?? ""}
           />
         ) : (
           <LiveTab
@@ -250,8 +272,9 @@ function SetupTab(props: {
   setErr: (s: string) => void;
   teamCount: number;
   teamsWithActions: number;
+  viewerUrlPath: string;
 }) {
-  const { gameId, hostToken, hostPassword, game, meta, setMeta, saveMeta, locMarkers, openNewLoc, openEdit, removeLoc, reload, setErr, teamCount, teamsWithActions } = props;
+  const { gameId, hostToken, hostPassword, game, meta, setMeta, saveMeta, locMarkers, openNewLoc, openEdit, removeLoc, reload, setErr, teamCount, teamsWithActions, viewerUrlPath } = props;
   const finalLatNum = meta.final_lat ? Number(meta.final_lat) : NaN;
   const finalLngNum = meta.final_lng ? Number(meta.final_lng) : NaN;
   const finalSet = Number.isFinite(finalLatNum) && Number.isFinite(finalLngNum);
@@ -320,6 +343,9 @@ function SetupTab(props: {
         ))}
         {game.locations.length === 0 && <div className="muted">No locations yet — add the first one to get started.</div>}
       </ul>
+
+      <h2 style={{ marginTop: 16 }}>Share a view-only link</h2>
+      <ViewerShare viewerUrlPath={viewerUrlPath} />
 
       <h2 style={{ marginTop: 16 }}>Host password</h2>
       <PasswordManager
@@ -546,9 +572,35 @@ function LiveTab(props: {
     .map(t => ({ team: t, pending: t.actions.filter(a => !a.completed) }))
     .filter(x => x.pending.length > 0);
 
+  // Sort teams by rank (best first). Backend already computed rank/score.
+  const ranked = [...teams].sort((a, b) => (a.rank || 999) - (b.rank || 999));
+
   return (
     <div className="stack">
       <MapView markers={[...locMarkers, ...teamMarkers]} big />
+
+      {data.leaderboard.length > 0 && (
+        <>
+          <h2>Leaderboard</h2>
+          <ol className="loc-list" style={{ listStyle: "none", paddingLeft: 0 }}>
+            {data.leaderboard.slice(0, 5).map(e => (
+              <li key={e.team_id} className="loc-row">
+                <div className="row" style={{ gap: 10, flex: 1 }}>
+                  <span style={{ fontWeight: 700, width: 28 }}>
+                    {e.rank === 1 ? "🥇" : e.rank === 2 ? "🥈" : e.rank === 3 ? "🥉" : `${e.rank}.`}
+                  </span>
+                  <span className="dot" style={{ background: e.color }} />
+                  <span style={{ fontWeight: 500 }}>{e.name}</span>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {e.solved_count} solved · {e.actions_done} actions
+                  </span>
+                </div>
+                <span className="code-pill">{e.score} pts</span>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
 
       {data.game.actions.length > 0 && data.teams.length > 0 && teamsMissingActions > 0 && (
         <div className="banner banner--warn" style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -601,20 +653,25 @@ function LiveTab(props: {
           <table className="matrix">
             <thead>
               <tr>
+                <th style={{ textAlign: "left" }}>#</th>
                 <th style={{ textAlign: "left" }}>Team</th>
                 {game.locations.map(l => <th key={l.id} title={l.name}>{shortLabel(l.name)}</th>)}
-                <th>Score</th>
+                <th>Solved</th>
                 <th>Actions</th>
+                <th>Score</th>
                 <th>Last seen</th>
               </tr>
             </thead>
             <tbody>
-              {teams.map(t => {
+              {ranked.map(t => {
                 const row = progress_matrix[String(t.id)] || {};
                 const open = openTeamId === t.id;
                 return (
                   <Fragment key={t.id}>
                     <tr style={{ cursor: "pointer" }} onClick={() => setOpenTeamId(open ? null : t.id)}>
+                      <td style={{ fontWeight: 700 }}>
+                        {t.rank === 1 ? "🥇" : t.rank === 2 ? "🥈" : t.rank === 3 ? "🥉" : `${t.rank}`}
+                      </td>
                       <td className="team-cell">
                         <span className="dot" style={{ background: t.color, marginRight: 8 }} />
                         {t.name} <span className="muted" style={{ fontSize: 11 }}>{open ? "▾" : "▸"}</span>
@@ -624,11 +681,12 @@ function LiveTab(props: {
                       ))}
                       <td>{t.solved_count}/{t.total}</td>
                       <td>{t.actions_done}/{t.actions_total}</td>
+                      <td><strong>{t.score ?? 0}</strong></td>
                       <td>{t.last_seen ? new Date(t.last_seen).toLocaleTimeString() : "—"}</td>
                     </tr>
                     {open && (
                       <tr>
-                        <td colSpan={game.locations.length + 4} style={{ textAlign: "left", background: "var(--bg2)" }}>
+                        <td colSpan={game.locations.length + 6} style={{ textAlign: "left", background: "var(--bg2)" }}>
                           {t.actions.length === 0 ? (
                             <span className="muted">No actions assigned yet.</span>
                           ) : (
@@ -942,6 +1000,35 @@ function PasswordManager(props: {
       </div>
       <div className="muted" style={{ fontSize: 11 }}>
         Tip: pick something easy to remember but not guessable. Anyone with the recovery link AND this password can host.
+      </div>
+    </div>
+  );
+}
+
+
+function ViewerShare({ viewerUrlPath }: { viewerUrlPath: string }) {
+  const [copied, setCopied] = useState(false);
+  const fullUrl = viewerUrlPath ? `${window.location.origin}${viewerUrlPath}` : "";
+  async function copy() {
+    if (!fullUrl) return;
+    try {
+      await navigator.clipboard.writeText(fullUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  }
+  return (
+    <div className="stack stack--tight">
+      <div className="muted" style={{ fontSize: 12 }}>
+        Send this link to anyone who should watch the live screen with you.
+        They'll see the map, leaderboard, and approvals — but cannot change anything.
+      </div>
+      <div className="row">
+        <input readOnly value={fullUrl} onFocus={e => e.currentTarget.select()}
+          style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 12 }} />
+        <button className="btn btn--ghost btn--small" onClick={copy} disabled={!fullUrl}>
+          {copied ? "✓ Copied" : "Copy"}
+        </button>
       </div>
     </div>
   );

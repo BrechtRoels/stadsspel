@@ -23,6 +23,7 @@ export default function PlayerGame() {
   } | null>(null);
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
   const lastPingRef = useRef<number>(0);
 
   useEffect(() => {
@@ -119,8 +120,57 @@ export default function PlayerGame() {
             {state.progress.filter(p => p.solved).length} / {state.progress.length || state.locations.length} solved
           </span>
         </div>
+        {(state.rank ?? 0) > 0 && (state.leaderboard?.length ?? 0) > 1 && (
+          <div className="row" style={{ marginTop: 8, gap: 10 }}>
+            <span className="banner" style={{
+              padding: "4px 10px",
+              background: state.rank === 1 ? "rgba(245,166,35,0.2)" : "rgba(90,185,255,0.15)",
+              color: state.rank === 1 ? "var(--warn)" : "#5ab9ff",
+              fontWeight: 700,
+            }}>
+              {state.rank === 1 ? "🥇 1st place" : state.rank === 2 ? "🥈 2nd" : state.rank === 3 ? "🥉 3rd" : `#${state.rank}`}
+              {" · "}{state.score ?? 0} pts
+            </span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              of {state.leaderboard?.length ?? 0} teams
+            </span>
+            <div className="spacer" />
+            <button
+              className="btn btn--ghost btn--small"
+              onClick={() => setShowLeaderboard(s => !s)}
+            >
+              {showLeaderboard ? "Hide ranking" : "Show ranking"}
+            </button>
+          </div>
+        )}
+        {showLeaderboard && (state.leaderboard?.length ?? 0) > 0 && (
+          <ol className="loc-list" style={{ listStyle: "none", paddingLeft: 0, marginTop: 8 }}>
+            {state.leaderboard!.map(e => (
+              <li key={e.team_id} className="loc-row" style={{ background: e.team_id === state.team_id ? "rgba(208,74,2,0.12)" : undefined }}>
+                <div className="row" style={{ gap: 8, flex: 1 }}>
+                  <span style={{ fontWeight: 700, width: 24 }}>
+                    {e.rank === 1 ? "🥇" : e.rank === 2 ? "🥈" : e.rank === 3 ? "🥉" : `${e.rank}.`}
+                  </span>
+                  <span className="dot" style={{ background: e.color }} />
+                  <span style={{ fontWeight: 500 }}>{e.name}</span>
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    {e.solved_count}/{state.progress.length} · {e.actions_done} act
+                  </span>
+                </div>
+                <span className="code-pill">{e.score} pts</span>
+              </li>
+            ))}
+          </ol>
+        )}
+        {state.test_mode && (
+          <div className="banner banner--warn" style={{ marginTop: 8 }}>
+            ⚠ Test mode is on — geofencing is disabled. Not the real game.
+          </div>
+        )}
         {geoErr && <div className="banner banner--bad" style={{ marginTop: 8 }}>{geoErr}</div>}
-        {!pos && !geoErr && <div className="banner banner--warn" style={{ marginTop: 8 }}>Waiting for GPS lock…</div>}
+        {!pos && !geoErr && !state.test_mode && (
+          <div className="banner banner--warn" style={{ marginTop: 8 }}>Waiting for GPS lock…</div>
+        )}
       </div>
 
       <div className="card">

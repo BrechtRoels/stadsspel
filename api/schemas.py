@@ -152,8 +152,22 @@ class TeamHostOut(BaseModel):
     total: int = 0
     actions_done: int = 0
     actions_total: int = 0
+    score: int = 0
+    rank: int = 0  # 1-indexed position in the leaderboard
+    wrong_attempts: int = 0
     actions: List[TeamActionOut] = []
     model_config = ConfigDict(from_attributes=True)
+
+
+class LeaderboardEntry(BaseModel):
+    """Public rank row players get to see — no leak of game internals."""
+    rank: int
+    team_id: int
+    name: str
+    color: str
+    solved_count: int
+    actions_done: int
+    score: int
 
 
 class TeamJoinIn(BaseModel):
@@ -200,9 +214,20 @@ class TeamStateOut(BaseModel):
     final_lng: Optional[float] = None
     final_label: Optional[str] = None
     all_solved: bool = False
+    # Live ranking — fuels the competitive aspect on the player UI.
+    rank: int = 0
+    score: int = 0
+    leaderboard: List[LeaderboardEntry] = []
+    test_mode: bool = False
 
 
 class HostDashboardOut(BaseModel):
     game: GameHostOut
     teams: List[TeamHostOut]
     progress_matrix: dict  # {team_id: {location_id: solved_bool}}
+    leaderboard: List[LeaderboardEntry] = []
+    viewer_url_path: Optional[str] = None  # frontend prepends origin
+
+
+class TestModeIn(BaseModel):
+    enabled: bool

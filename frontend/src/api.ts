@@ -49,6 +49,7 @@ export type GameHost = {
   final_label?: string | null;
   started: boolean;
   has_password: boolean;
+  test_mode?: boolean;
   locations: LocationHost[];
   actions: Action[];
 };
@@ -64,13 +65,28 @@ export type TeamHost = {
   total: number;
   actions_done: number;
   actions_total: number;
+  score?: number;
+  rank?: number;
+  wrong_attempts?: number;
   actions: TeamAction[];
+};
+
+export type LeaderboardEntry = {
+  rank: number;
+  team_id: number;
+  name: string;
+  color: string;
+  solved_count: number;
+  actions_done: number;
+  score: number;
 };
 
 export type HostDashboard = {
   game: GameHost;
   teams: TeamHost[];
   progress_matrix: Record<string, Record<string, boolean>>;
+  leaderboard: LeaderboardEntry[];
+  viewer_url_path?: string | null;
 };
 
 export type ProgressItem = {
@@ -92,6 +108,10 @@ export type TeamState = {
   final_lng?: number | null;
   final_label?: string | null;
   all_solved: boolean;
+  rank?: number;
+  score?: number;
+  leaderboard?: LeaderboardEntry[];
+  test_mode?: boolean;
 };
 
 export type TeamSession = {
@@ -162,6 +182,24 @@ export const setHostPassword = (gameId: number, hostToken: string, hostPassword:
   req<{ has_password: boolean }>(`/api/games/${gameId}/password`, {
     body: { password: newPassword },
     hostToken, hostPassword,
+  });
+
+export const toggleTestMode = (gameId: number, hostToken: string, hostPassword: string, enabled: boolean) =>
+  req<{ test_mode: boolean }>(`/api/games/${gameId}/test-mode`, {
+    body: { enabled },
+    hostToken, hostPassword,
+  });
+
+export const getViewerDashboard = (gameId: number, viewerToken: string) =>
+  fetch(`/api/games/${gameId}/dashboard-viewer`, {
+    headers: { "X-Viewer-Token": viewerToken },
+  }).then(async (r) => {
+    if (!r.ok) {
+      let detail = `${r.status}`;
+      try { const j = await r.json(); detail = j.detail || detail; } catch {}
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    return r.json() as Promise<HostDashboard>;
   });
 
 export const updateGame = (

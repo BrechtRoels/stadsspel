@@ -56,9 +56,16 @@ def _migrate_additive() -> None:
                 conn.execute(text("ALTER TABLE progress ADD COLUMN position INTEGER"))
     if "games" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("games")}
-        if "password_hash" not in cols:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if "password_hash" not in cols:
                 conn.execute(text("ALTER TABLE games ADD COLUMN password_hash TEXT"))
+            if "test_mode" not in cols:
+                # Use INTEGER for SQLite + Postgres compatibility (booleans
+                # round-trip fine through SQLAlchemy's type adaption).
+                conn.execute(text("ALTER TABLE games ADD COLUMN test_mode BOOLEAN DEFAULT FALSE"))
+                conn.execute(text("UPDATE games SET test_mode = FALSE WHERE test_mode IS NULL"))
+            if "viewer_token" not in cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN viewer_token TEXT"))
 
 
 _migrate_additive()
@@ -290,14 +297,82 @@ def _lock_and_randomize(db: Session, game: models.Game) -> int:
     return randomized
 
 
-def _team_summary(db: Session, team: models.Team, total_locations: int) -> schemas.TeamHostOut:
-    solved = (
-        db.query(models.Progress)
-        .filter(models.Progress.team_id == team.id, models.Progress.solved == True)  # noqa: E712
-        .count()
+# Scoring weights — kept intentionally simple so the formula is explainable
+# and tweaks don't ripple through the codebase.
+_SCORE_PER_SOLVED = 100
+_SCORE_PER_ACTION = 30
+_SCORE_PER_WRONG = -2
+
+
+def _team_score_breakdown(team: models.Team) -> dict:
+    """Returns components used both for the score and for tiebreaking."""
+    solved_count = sum(1 for p in team.progress if p.solved)
+    total_attempts = sum((p.attempts or 0) for p in team.progress)
+    # A team that solves a question on attempt N has 1 correct + (N-1) wrong.
+    wrong_attempts = max(0, total_attempts - solved_count)
+    actions_done = sum(1 for ta in team.actions if ta.completed)
+    last_solve = max(
+        (p.solved_at for p in team.progress if p.solved and p.solved_at),
+        default=None,
     )
+    score = (
+        solved_count * _SCORE_PER_SOLVED
+        + actions_done * _SCORE_PER_ACTION
+        + wrong_attempts * _SCORE_PER_WRONG
+    )
+    return {
+        "solved_count": solved_count,
+        "wrong_attempts": wrong_attempts,
+        "actions_done": actions_done,
+        "last_solve": last_solve,
+        "score": score,
+    }
+
+
+def _ranked_teams(game: models.Game) -> list[tuple[models.Team, dict, int]]:
+    """Returns [(team, breakdown, rank)] sorted high → low.
+    Tiebreakers: more solved, more actions, fewer wrong attempts, earlier last solve.
+    """
+    rows = []
+    for t in game.teams:
+        b = _team_score_breakdown(t)
+        rows.append((t, b))
+    # Sorting key: (-score, -solved, -actions, wrong, last_solve_ts, team.id)
+    def key(item):
+        t, b = item
+        last_ts = b["last_solve"].timestamp() if b["last_solve"] else float("inf")
+        return (-b["score"], -b["solved_count"], -b["actions_done"], b["wrong_attempts"], last_ts, t.id)
+    rows.sort(key=key)
+    return [(t, b, idx + 1) for idx, (t, b) in enumerate(rows)]
+
+
+def _leaderboard_entries(game: models.Game) -> list[schemas.LeaderboardEntry]:
+    return [
+        schemas.LeaderboardEntry(
+            rank=rank,
+            team_id=t.id,
+            name=t.name,
+            color=t.color,
+            solved_count=b["solved_count"],
+            actions_done=b["actions_done"],
+            score=b["score"],
+        )
+        for (t, b, rank) in _ranked_teams(game)
+    ]
+
+
+def _ensure_viewer_token(db: Session, game: models.Game) -> str:
+    if not game.viewer_token:
+        game.viewer_token = _token()
+        db.commit()
+    return game.viewer_token
+
+
+def _team_summary(db: Session, team: models.Team, total_locations: int,
+                   breakdown: dict | None = None, rank: int = 0) -> schemas.TeamHostOut:
+    if breakdown is None:
+        breakdown = _team_score_breakdown(team)
     action_views = _team_action_views(team)
-    actions_done = sum(1 for a in action_views if a.completed)
     return schemas.TeamHostOut(
         id=team.id,
         name=team.name,
@@ -305,10 +380,13 @@ def _team_summary(db: Session, team: models.Team, total_locations: int) -> schem
         last_lat=team.last_lat,
         last_lng=team.last_lng,
         last_seen=team.last_seen,
-        solved_count=solved,
+        solved_count=breakdown["solved_count"],
         total=total_locations,
-        actions_done=actions_done,
+        actions_done=breakdown["actions_done"],
         actions_total=len(action_views),
+        score=breakdown["score"],
+        rank=rank,
+        wrong_attempts=breakdown["wrong_attempts"],
         actions=action_views,
     )
 
@@ -416,18 +494,63 @@ def host_dashboard(
     db: Session = Depends(get_db),
 ):
     game = _require_host(db, game_id, x_host_token, x_host_password)
+    return _build_dashboard(db, game)
+
+
+def _build_dashboard(db: Session, game: models.Game, *, hide_host_token: bool = False) -> schemas.HostDashboardOut:
     total = len(game.locations)
-    teams = [_team_summary(db, t, total) for t in game.teams]
+    ranked = _ranked_teams(game)
+    teams = [_team_summary(db, t, total, breakdown=b, rank=r) for (t, b, r) in ranked]
     matrix: dict = {}
     for t in game.teams:
         matrix[t.id] = {}
         for p in t.progress:
             matrix[t.id][p.location_id] = bool(p.solved)
+    viewer_token = _ensure_viewer_token(db, game)
+    out_game = schemas.GameHostOut.from_orm_game(game)
+    if hide_host_token:
+        out_game.host_token = ""  # don't leak the host secret to viewers
     return schemas.HostDashboardOut(
-        game=schemas.GameHostOut.from_orm_game(game),
+        game=out_game,
         teams=teams,
         progress_matrix=matrix,
+        leaderboard=_leaderboard_entries(game),
+        viewer_url_path=f"/view/{game.id}#v={viewer_token}",
     )
+
+
+@app.get("/api/games/{game_id}/dashboard-viewer", response_model=schemas.HostDashboardOut)
+def viewer_dashboard(
+    game_id: int,
+    x_viewer_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    """Read-only dashboard for spectators / co-hosts. The viewer token is a
+    separate, less-powerful credential — anyone with it can watch the live
+    state but cannot mutate anything.
+    """
+    if not x_viewer_token:
+        raise HTTPException(status_code=401, detail="Missing viewer token")
+    game = db.query(models.Game).filter(models.Game.id == game_id).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if not game.viewer_token or game.viewer_token != x_viewer_token:
+        raise HTTPException(status_code=403, detail="Bad viewer token")
+    return _build_dashboard(db, game, hide_host_token=True)
+
+
+@app.post("/api/games/{game_id}/test-mode")
+def toggle_test_mode(
+    game_id: int,
+    payload: schemas.TestModeIn,
+    x_host_token: str = Header(default=""),
+    x_host_password: str = Header(default=""),
+    db: Session = Depends(get_db),
+):
+    game = _require_host(db, game_id, x_host_token, x_host_password)
+    game.test_mode = bool(payload.enabled)
+    db.commit()
+    return {"test_mode": game.test_mode}
 
 
 @app.patch("/api/games/{game_id}", response_model=schemas.GameHostOut)
@@ -745,6 +868,9 @@ def _state_for(db: Session, team: models.Team) -> schemas.TeamStateOut:
             hint=(loc.hint if (loc.hint and unlocked) else None),
         ))
 
+    leaderboard = _leaderboard_entries(game)
+    own = next((e for e in leaderboard if e.team_id == team.id), None)
+
     return schemas.TeamStateOut(
         team_id=team.id,
         team_name=team.name,
@@ -757,6 +883,10 @@ def _state_for(db: Session, team: models.Team) -> schemas.TeamStateOut:
         final_lng=(game.final_lng if all_solved else None),
         final_label=(game.final_label if all_solved else None),
         all_solved=all_solved,
+        rank=(own.rank if own else 0),
+        score=(own.score if own else 0),
+        leaderboard=leaderboard,
+        test_mode=bool(game.test_mode),
     )
 
 
@@ -839,15 +969,18 @@ def get_question(
     if prog and prog.solved:
         return {"already_solved": True, "fragment": loc.fragment}
 
-    if team.last_lat is None or team.last_lng is None:
-        raise HTTPException(status_code=400, detail="No location ping recorded yet")
-
-    distance = _haversine_m(team.last_lat, team.last_lng, loc.lat, loc.lng)
-    if distance > loc.radius_m:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Out of range ({int(distance)}m, need ≤{loc.radius_m}m)",
-        )
+    test_mode = bool(team.game.test_mode)
+    if not test_mode:
+        if team.last_lat is None or team.last_lng is None:
+            raise HTTPException(status_code=400, detail="No location ping recorded yet")
+        distance = _haversine_m(team.last_lat, team.last_lng, loc.lat, loc.lng)
+        if distance > loc.radius_m:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Out of range ({int(distance)}m, need ≤{loc.radius_m}m)",
+            )
+    else:
+        distance = 0  # test mode: distance not enforced
 
     # Hint is only revealed if this location's index is unlocked by approved actions.
     locs_in_order = sorted(team.game.locations, key=lambda l: (l.order_idx, l.id))
@@ -886,14 +1019,15 @@ def submit_answer(
             detail="This location isn't on your team's current step.",
         )
 
-    if team.last_lat is None or team.last_lng is None:
-        raise HTTPException(status_code=400, detail="No location ping recorded yet")
-    distance = _haversine_m(team.last_lat, team.last_lng, loc.lat, loc.lng)
-    if distance > loc.radius_m:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Out of range ({int(distance)}m, need ≤{loc.radius_m}m)",
-        )
+    if not team.game.test_mode:
+        if team.last_lat is None or team.last_lng is None:
+            raise HTTPException(status_code=400, detail="No location ping recorded yet")
+        distance = _haversine_m(team.last_lat, team.last_lng, loc.lat, loc.lng)
+        if distance > loc.radius_m:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Out of range ({int(distance)}m, need ≤{loc.radius_m}m)",
+            )
 
     prog = db.query(models.Progress).filter(
         models.Progress.team_id == team.id, models.Progress.location_id == loc.id
