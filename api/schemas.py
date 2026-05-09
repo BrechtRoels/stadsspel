@@ -152,6 +152,7 @@ class TeamHostOut(BaseModel):
     score: int = 0
     rank: int = 0  # 1-indexed position in the leaderboard
     wrong_attempts: int = 0
+    is_test: bool = False
     actions: List[TeamActionOut] = []
     model_config = ConfigDict(from_attributes=True)
 
@@ -180,6 +181,7 @@ class TeamSession(BaseModel):
     color: str
     game_id: int
     game_name: str
+    is_test: bool = False
 
 
 class PingIn(BaseModel):
@@ -205,6 +207,7 @@ class TeamStateOut(BaseModel):
     team_name: str
     color: str
     game_name: str
+    is_test: bool = False
     locations: List[LocationPublicOut]
     progress: List[ProgressItem]
     actions: List[TeamActionOut] = []

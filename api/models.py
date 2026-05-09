@@ -74,6 +74,10 @@ class Team(Base):
     last_lng = Column(Float, nullable=True)
     last_seen = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # True when this team joined while the game was in test mode. Toggling
+    # test mode off deletes every is_test=True team so the real game starts
+    # from a clean roster.
+    is_test = Column(Boolean, default=False, nullable=False)
 
     game = relationship("Game", back_populates="teams")
     progress = relationship("Progress", back_populates="team", cascade="all, delete-orphan")

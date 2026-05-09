@@ -126,7 +126,21 @@ export default function HostGame() {
     try { await stopGame(id, hostToken, hostPassword); reload(); } catch (e: any) { setErr(e.message); }
   }
   async function setTest(enabled: boolean) {
-    try { await toggleTestMode(id, hostToken, hostPassword, enabled); reload(); }
+    if (!enabled && data) {
+      const testCount = data.teams.filter(t => t.is_test).length;
+      if (testCount > 0) {
+        if (!confirm(
+          `End test mode?\n\n${testCount} test team(s) and their progress/actions will be permanently deleted, so the real game starts from a clean roster.\n\nReal teams (joined before test mode was on) are kept.`
+        )) return;
+      }
+    }
+    try {
+      const r = await toggleTestMode(id, hostToken, hostPassword, enabled);
+      if (r.deleted_test_teams > 0) {
+        alert(`Test mode ended. ${r.deleted_test_teams} test team(s) removed.`);
+      }
+      reload();
+    }
     catch (e: any) { setErr(e.message); }
   }
 
@@ -196,11 +210,24 @@ export default function HostGame() {
             <span>Test mode <span className="muted">(skip geofence)</span></span>
           </label>
         </div>
-        {game.test_mode && (
-          <div className="banner banner--warn" style={{ marginTop: 8 }}>
-            ⚠ <strong>TEST MODE</strong> is on — teams can answer questions without being in range. Turn off before the real game.
-          </div>
-        )}
+        {game.test_mode && (() => {
+          const testCount = data.teams.filter(t => t.is_test).length;
+          return (
+            <div className="banner banner--warn" style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                ⚠ <strong>TEST MODE</strong> is on — teams can answer without being in range, and any team that joins right now is a <em>test team</em>.
+                {testCount > 0 && <> Currently <strong>{testCount}</strong> test team(s).</>}
+              </div>
+              <button
+                className="btn btn--small"
+                onClick={() => setTest(false)}
+                title="Turn off test mode and delete test teams"
+              >
+                End test {testCount > 0 ? `& delete ${testCount} team(s)` : ""}
+              </button>
+            </div>
+          );
+        })()}
       </div>
 
       <div className="card">
@@ -494,7 +521,11 @@ function LiveTab(props: {
                       </td>
                       <td className="team-cell">
                         <span className="dot" style={{ background: t.color, marginRight: 8 }} />
-                        {t.name} <span className="muted" style={{ fontSize: 11 }}>{open ? "▾" : "▸"}</span>
+                        {t.name}
+                        {t.is_test && (
+                          <span className="code-pill" style={{ marginLeft: 6, background: "rgba(245,166,35,0.15)", color: "var(--warn)", fontSize: 10, padding: "2px 6px" }}>TEST</span>
+                        )}
+                        <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>{open ? "▾" : "▸"}</span>
                       </td>
                       {game.locations.map(l => (
                         <td key={l.id} className={row[String(l.id)] ? "solved" : ""}>{row[String(l.id)] ? "✓" : ""}</td>

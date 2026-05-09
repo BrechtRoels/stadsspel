@@ -26,21 +26,43 @@ export default function PlayerGame() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const lastPingRef = useRef<number>(0);
 
+  function handleAuthLoss() {
+    // Team got wiped (e.g. host ended test mode). Clear the cached
+    // credentials and bounce back to the join page with a hint.
+    localStorage.removeItem(`team:${id}`);
+    localStorage.removeItem(`team:${id}:meta`);
+    alert("Your team is no longer in this game. The host may have ended test mode. Please rejoin.");
+    nav("/play");
+  }
+
   useEffect(() => {
     if (!token) { nav("/play"); return; }
     (async () => {
       try { setState(await teamState(id, token)); }
-      catch (e: any) { setErr(e.message); }
+      catch (e: any) {
+        if (/^4(03|04)/.test(e.message) || /Bad team token|Team not found/i.test(e.message)) {
+          handleAuthLoss();
+          return;
+        }
+        setErr(e.message);
+      }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, token]);
 
   // poll team state
   useEffect(() => {
     if (!token) return;
     const t = setInterval(async () => {
-      try { setState(await teamState(id, token)); } catch {}
+      try { setState(await teamState(id, token)); }
+      catch (e: any) {
+        if (/Bad team token|Team not found/i.test(e?.message || "")) {
+          handleAuthLoss();
+        }
+      }
     }, 5000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, token]);
 
   // geolocation watcher
@@ -126,6 +148,9 @@ export default function PlayerGame() {
         <div className="row row--wrap">
           <span className="dot" style={{ background: state.color, marginRight: 6 }} />
           <strong>{state.team_name}</strong>
+          {state.is_test && (
+            <span className="code-pill" style={{ background: "rgba(245,166,35,0.15)", color: "var(--warn)", fontSize: 10 }}>TEST</span>
+          )}
           <span className="muted">· {state.game_name}</span>
           <div className="spacer" />
           <span className="muted">

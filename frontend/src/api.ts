@@ -72,6 +72,7 @@ export type TeamHost = {
   score?: number;
   rank?: number;
   wrong_attempts?: number;
+  is_test?: boolean;
   actions: TeamAction[];
 };
 
@@ -117,6 +118,7 @@ export type TeamState = {
   team_name: string;
   color: string;
   game_name: string;
+  is_test?: boolean;
   locations: LocationPublic[];
   progress: ProgressItem[];
   actions: TeamAction[];
@@ -137,6 +139,7 @@ export type TeamSession = {
   color: string;
   game_id: number;
   game_name: string;
+  is_test?: boolean;
 };
 
 /** Sentinel error message thrown when the server says a host password is needed. */
@@ -201,7 +204,7 @@ export const setHostPassword = (gameId: number, hostToken: string, hostPassword:
   });
 
 export const toggleTestMode = (gameId: number, hostToken: string, hostPassword: string, enabled: boolean) =>
-  req<{ test_mode: boolean }>(`/api/games/${gameId}/test-mode`, {
+  req<{ test_mode: boolean; deleted_test_teams: number }>(`/api/games/${gameId}/test-mode`, {
     body: { enabled },
     hostToken, hostPassword,
   });

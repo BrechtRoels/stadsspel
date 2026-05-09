@@ -62,6 +62,12 @@ def _migrate_additive() -> None:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE locations ADD COLUMN kind TEXT DEFAULT 'question'"))
                 conn.execute(text("UPDATE locations SET kind = 'question' WHERE kind IS NULL"))
+    if "teams" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("teams")}
+        if "is_test" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE teams ADD COLUMN is_test BOOLEAN DEFAULT FALSE"))
+                conn.execute(text("UPDATE teams SET is_test = FALSE WHERE is_test IS NULL"))
     if "games" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("games")}
         with engine.begin() as conn:
@@ -400,6 +406,7 @@ def _team_summary(db: Session, team: models.Team, total_locations: int,
         score=breakdown["score"],
         rank=rank,
         wrong_attempts=breakdown["wrong_attempts"],
+        is_test=bool(team.is_test),
         actions=action_views,
     )
 
@@ -582,10 +589,21 @@ def toggle_test_mode(
     x_host_password: str = Header(default=""),
     db: Session = Depends(get_db),
 ):
+    """Toggle test mode. Turning it OFF also deletes every team that joined
+    while it was on (their progress + actions cascade). Real teams that
+    joined before test mode was ever enabled are kept.
+    """
     game = _require_host(db, game_id, x_host_token, x_host_password)
-    game.test_mode = bool(payload.enabled)
+    new_value = bool(payload.enabled)
+    deleted = 0
+    if game.test_mode and not new_value:
+        test_teams = [t for t in game.teams if t.is_test]
+        deleted = len(test_teams)
+        for t in test_teams:
+            db.delete(t)
+    game.test_mode = new_value
     db.commit()
-    return {"test_mode": game.test_mode}
+    return {"test_mode": game.test_mode, "deleted_test_teams": deleted}
 
 
 @app.patch("/api/games/{game_id}", response_model=schemas.GameHostOut)
@@ -833,6 +851,7 @@ def join_game(payload: schemas.TeamJoinIn, db: Session = Depends(get_db)):
             color=existing.color,
             game_id=game.id,
             game_name=game.name,
+            is_test=bool(existing.is_test),
         )
 
     team = models.Team(
@@ -840,6 +859,7 @@ def join_game(payload: schemas.TeamJoinIn, db: Session = Depends(get_db)):
         name=name,
         color=payload.color or "#D04A02",
         token=_token(),
+        is_test=bool(game.test_mode),
     )
     db.add(team)
     db.commit()
@@ -853,6 +873,7 @@ def join_game(payload: schemas.TeamJoinIn, db: Session = Depends(get_db)):
         color=team.color,
         game_id=game.id,
         game_name=game.name,
+        is_test=bool(team.is_test),
     )
 
 
@@ -932,6 +953,7 @@ def _state_for(db: Session, team: models.Team) -> schemas.TeamStateOut:
         team_name=team.name,
         color=team.color,
         game_name=game.name,
+        is_test=bool(team.is_test),
         locations=public_locs,
         progress=items,
         actions=_team_action_views(team),
